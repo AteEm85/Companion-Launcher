@@ -1,0 +1,48 @@
+# Every push that changes the companion rebuilds OutlawsCompanion.exe on a Windows machine and publishes it in companion/
+# (with version.txt = "<version> <sha256>"). The app's Update Launcher button downloads it from there.
+name: Build Outlaws Companion
+on:
+  push:
+    branches: [main]
+    paths: ["companion.py", "launcher.ico", ".github/workflows/build.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: { group: build, cancel-in-progress: false }
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Version (raised by one when companion.py was not bumped by hand)
+        shell: python
+        run: |
+          import re, os
+          src = open("companion.py", encoding="utf-8").read()
+          cur = int(re.search(r"^VERSION = (\d+)", src, re.M).group(1))
+          try: pub = int(open("companion/version.txt").read().split()[0])
+          except Exception: pub = 0
+          if cur <= pub:
+              cur = pub + 1
+              src = re.sub(r"^VERSION = \d+", "VERSION = %d" % cur, src, count=1, flags=re.M)
+              open("companion.py", "w", encoding="utf-8", newline="").write(src)
+          open(os.environ["GITHUB_ENV"], "a").write("VER=%d\n" % cur)
+          print("building version", cur)
+      - name: Build
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --icon launcher.ico --name OutlawsCompanion --distpath dist companion.py
+      - name: Publish
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force companion | Out-Null
+          Copy-Item dist\OutlawsCompanion.exe companion\OutlawsCompanion.exe -Force
+          $h = (Get-FileHash -Algorithm SHA256 companion\OutlawsCompanion.exe).Hash.ToLower()
+          Set-Content -NoNewline -Path companion\version.txt -Value "$env:VER $h"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add companion.py companion/version.txt companion/OutlawsCompanion.exe
+          git commit -m "Build Outlaws Companion v$env:VER [skip ci]"
+          git push
