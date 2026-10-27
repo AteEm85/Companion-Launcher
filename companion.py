@@ -44,8 +44,8 @@ MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "f
 GAMES = [("Survival Horde", "horde"), ("Normal bot game", "dm")]
 LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare"]
 PARCH, INK, RUST = "#f1e4c3", "#3b2a1a", "#b5530f"
-WIN_W, WIN_H = 580, 790
-PANEL_END = 602
+WIN_W, WIN_H = 580, 824
+PANEL_END = 636
 CLOSE_W = 160
 DARK, TXT, DIM, GOLD, WARN, EDGE = "#120b07", "#f6ead0", "#cdb994", "#f2b24a", "#ff9e6e", "#7a5a32"   # on the dark picture
 BTN, BTN_HOT, BTN_EDGE = "#8a3b12", "#a84a18", "#4a1e08"
@@ -139,6 +139,11 @@ def hardware():
         return 0, os.cpu_count() or 0
 
 STANDARD_KEYS = {k.lower() for _, k in MAPS}
+# Each standard map's modes, from its .rcm (MODES: D deathmatch, M team deathmatch, C capture the flag, K chicken, T tag)
+STD_MODES = {"civpow2": "DCKM", "drygulch": "CKMD", "fort": "CKMD", "granary": "CKMD", "hargrove": "DCKM", "lilbatl": "DKM",
+             "mltsimms": "CKMD", "orleans": "CKMD", "thudtowr": "DM", "town_2p": "DKCT", "wilderns": "CKMD"}
+GAME_MODES = [("Deathmatch", "D", "dm"), ("Team deathmatch", "M", "team"), ("Capture the flag", "C", "ctf"),
+              ("Chicken (KFC)", "K", "chicken")]       # (shown, .rcm letter, botctl --mode)
 
 def custom_maps(game, toolkit=None):
     """[(label, key, modes)] for the custom maps in the game folder: every <key>.rcm with its <key>.lab beside it.
@@ -281,6 +286,10 @@ class Txt:
 
 class App(tk.Tk):
     def __init__(self):
+        try:                                     # its own taskbar button and icon, not Python's
+            import ctypes; ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("OutlawsCompanion")
+        except Exception:
+            pass
         super().__init__()
         self.title(APP); self.geometry("%dx%d" % (WIN_W, WIN_H)); self.configure(bg=DARK); self.resizable(False, False)
         self.cfg = load(); self.busy = False; self.host_proc = None; self.session = False
@@ -310,6 +319,11 @@ class App(tk.Tk):
             self.bg_img = tk.PhotoImage(data=companion_bg.PNG); cv.create_image(0, 0, image=self.bg_img, anchor="nw")
         except Exception:
             self.bg_img = None
+        try:                                     # the window's and the taskbar's icon (the exe's own icon is set at build time)
+            import companion_bg
+            self.icon_img = tk.PhotoImage(data=companion_bg.ICON); self.iconphoto(True, self.icon_img)
+        except Exception:
+            pass
         cv.create_rectangle(12, 104, WIN_W - 12, PANEL_END, outline=EDGE)                      # the panel the tabs share
         Txt(cv, WIN_W // 2, 30, "OUTLAWS COMPANION", fill=GOLD, font=("Georgia", 20, "bold"), anchor="center")
         self.folder_lbl = Txt(cv, WIN_W // 2, 58, "", fill=DIM, font=("Segoe UI", 9), anchor="center")
@@ -393,6 +407,8 @@ class App(tk.Tk):
                 self.pick_folder(first=True)
         self.folder_lbl.configure(text=self.game_dir())
         self.map_choices()
+        if self.cfg.get("look_on") and not game_running():
+            threading.Thread(target=self.look_off, daemon=True).start()      # left over from a session that was cut short
         if journal_read():
             if game_running():
                 self.say("The game is running with mods from an earlier session; they come out when it closes.")
@@ -647,7 +663,7 @@ class App(tk.Tk):
             os.remove(new); self.say("The downloaded companion.py is broken (%s); nothing changed." % e); return
         shutil.copyfile(me, me + ".bak"); os.replace(new, me)
         try:                                                   # the background picture lives beside it
-            for extra in ("companion_bg.py", "input_agent.js"):
+            for extra in ("companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py"):
                 with self.gh(extra, 60, root=True) as r: data = r.read()
                 with open(os.path.join(os.path.dirname(me), extra), "wb") as f: f.write(data)
         except Exception: pass
@@ -723,10 +739,9 @@ class App(tk.Tk):
             if addr is False: self.say("Joining cancelled."); return
             if not addr:
                 self.say("No hosted game found, so no mods were installed. Opening the game anyway: use LAN > Join Game.")
-            game = self.game_dir(); items = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""; self.music_path = None
+            game = self.game_dir(); items = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""; self.music_path = None; man = None
             try:
                 if not addr: raise OSError("no host")
-                man = None
                 for i in range(3):                       # the host hashes its mod files when a game starts: give it time
                     try: man = json.load(self.fetch(addr, "/manifest.json", 60)); break
                     except Exception:
@@ -753,12 +768,19 @@ class App(tk.Tk):
                         if os.path.exists(cur) and sha256(cur) == fl["sha256"]: continue      # already there
                         todo.append(fl)
                     if not todo: self.say("%s: already in place" % mod["title"]); continue
-                    self.say("Downloading %s (%d file(s))..." % (mod["title"], len(todo)))
+                    new = sum(1 for fl in todo if not self.cached_mod(fl["sha256"]))
+                    if new: self.say("Downloading %s (%d file(s))..." % (mod["title"], new))
+                    cached = 0
                     for fl in todo:
-                        p = os.path.join(tmp, fl["dest"])
-                        with self.fetch(addr, fl["url"], 60) as r, open(p, "wb") as out: shutil.copyfileobj(r, out)
-                        if sha256(p) != fl["sha256"]: raise RuntimeError("download of %s was damaged" % fl["dest"])
+                        p = self.cached_mod(fl["sha256"])
+                        if p: cached += 1
+                        else:
+                            p = os.path.join(tmp, fl["dest"])
+                            with self.fetch(addr, fl["url"], 60) as r, open(p, "wb") as out: shutil.copyfileobj(r, out)
+                            if sha256(p) != fl["sha256"]: raise RuntimeError("download of %s was damaged" % fl["dest"])
+                            self.keep_mod(p, fl["sha256"])
                         items.append((fl["dest"], p))
+                    if cached: self.say("%s: %d of %d file(s) were already on this PC." % (mod["title"], cached, len(todo)))
                 if items:
                     if not self.ensure_writable(game): raise RuntimeError("the game folder is protected, so the mods can't be installed")
                     install_files(game, items); self.session = True
@@ -769,6 +791,9 @@ class App(tk.Tk):
                     self.say("Stopped: %s" % e); return
                 if addr: self.say("Could not ask the host for mods (%s); joining without." % e)
                 items = []
+            if addr and mode in ("horde", "dark"):
+                zombies = any(m.get("id") == "zombie_skins" for m in man.get("mods", [])) if man else False
+                self.look_on(game, zombies, dark="flash" if mode == "dark" else True)
             cmd = game_cmd(game, self.screen.get(), self.char.get(), addr)      # addr: straight into the host's game
             try: me = subprocess.Popen(cmd, cwd=game)
             except OSError as e:
@@ -777,6 +802,7 @@ class App(tk.Tk):
                 self.say("Game starting: it joins the host's Survival Horde game and the Survivors team by itself.")
                 threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
                 if self.music_path: threading.Thread(target=self.play_music, args=(self.music_path,), daemon=True).start()
+                threading.Thread(target=self.hud_loop, args=(addr,), daemon=True).start()
             elif addr:
                 self.say("Game starting: it joins the host's game by itself.")
             else:
@@ -786,6 +812,183 @@ class App(tk.Tk):
         finally:
             self.busy = False
             self.after(0, lambda: self.join_btn.configure(text="JOIN GAME", state="normal"))
+
+    def cached_mod(self, sha):
+        p = os.path.join(DATA, "cache", sha)
+        return p if os.path.exists(p) else None
+
+    def keep_mod(self, path, sha):
+        """Keep a downloaded mod file (by its hash) for the next join. Files not used for 60 days are dropped."""
+        try:
+            d = os.path.join(DATA, "cache"); os.makedirs(d, exist_ok=True)
+            shutil.copyfile(path, os.path.join(d, sha))
+            for n in os.listdir(d):
+                q = os.path.join(d, n)
+                if time.time() - os.path.getmtime(q) > 60 * 86400: os.remove(q)
+        except OSError:
+            pass
+
+    def look_modules(self):
+        """The bot toolkit's Survival look (teamcolors.py with darkmode, spvpatch, dxpatch), built into this app. Their
+        backups and log go to this app's folder, never next to the game."""
+        import teamcolors, darkmode
+        d = os.path.join(DATA, "look"); os.makedirs(d, exist_ok=True)
+        teamcolors.BACKUP = os.path.join(d, "teamcolors_orig.zip"); teamcolors.LOG = os.path.join(d, "teamcolors_log.txt")
+        darkmode.BACKUP = os.path.join(d, "darkmode_orig.zip")
+        return teamcolors
+
+    def look_on(self, game, zombies, dark=True):
+        """Survivors purple, the Horde green, the team names and the darker world: edits in Common.kpf, made before
+        the game starts and taken out again when it closes (what the host's own game gets)."""
+        kpf = os.path.join(game, "Common.kpf")
+        if not os.path.exists(kpf) or not self.ensure_writable(game): return
+        try:
+            tc = self.look_modules()
+            self.cfg["look_on"] = True; save(self.cfg)
+            self.say("Putting in the Survival look (Survivors purple, Horde green, a darker world)...")
+            if not tc.set_theme("on", kpf=kpf, quiet=True, neutral="horde" if zombies else False, dark=dark):
+                self.say("Couldn't put in the Survival look; the game starts with the normal colours.")
+        except Exception as e:
+            self.say("Couldn't put in the Survival look (%s)." % e)
+
+    def look_off(self):
+        if not self.cfg.get("look_on"): return
+        kpf = os.path.join(self.game_dir(), "Common.kpf")
+        try:
+            tc = self.look_modules()
+            for _ in range(20):
+                if tc.set_theme("off", kpf=kpf, quiet=True): break
+                time.sleep(3)
+            else:
+                self.say("The game's colours couldn't be put back yet; they will be the next time this app starts."); return
+            self.cfg["look_on"] = False; save(self.cfg)
+        except Exception as e:
+            self.say("Couldn't put the game's colours back (%s)." % e)
+
+    # -- on-screen overlays in a joined Horde game: what the host's own screen shows (tierhud, announce, welcome)
+    def overlay(self, bg, alpha=0.9, transparent=False):
+        w = tk.Toplevel(self); w.withdraw(); w.overrideredirect(True); w.attributes("-topmost", True); w.configure(bg=bg)
+        try:
+            if transparent: w.attributes("-transparentcolor", bg)
+            w.attributes("-alpha", alpha)
+        except tk.TclError: pass
+        return w
+
+    def show_no_focus(self, w):
+        """Show an overlay without taking the focus from the game; mouse clicks go straight through it."""
+        try:
+            import ctypes
+            u = ctypes.windll.user32; fg = u.GetForegroundWindow()
+            w.update_idletasks()
+            hwnd = u.GetParent(w.winfo_id()) or w.winfo_id()
+            u.SetWindowLongW(hwnd, -20, u.GetWindowLongW(hwnd, -20) | 0x08000000 | 0x80 | 0x20 | 0x80000)
+            u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x1 | 0x2 | 0x10 | 0x40); u.ShowWindow(hwnd, 4)
+            if fg and u.GetForegroundWindow() != fg: u.SetForegroundWindow(fg)
+        except Exception:
+            w.deiconify()
+
+    def thunder(self):
+        """One of the game's own thunder sounds (read from its sound archive once), as the host's banner plays it."""
+        try:
+            import winsound, struct, random
+            want = random.choice(["thunder1.wav", "thunder2.wav"])
+            cache = os.path.join(DATA, "sounds", want)
+            if not os.path.exists(cache):
+                for lab in ("olpatch5.lab", "olsfx.lab", "olpatch6.lab", "olpatch4.lab", "olpatch3.lab"):
+                    path = os.path.join(self.game_dir(), lab)
+                    if not os.path.exists(path): continue
+                    with open(path, "rb") as f:
+                        head = f.read(16); n, = struct.unpack_from("<I", head, 8); ent = f.read(16 * n)
+                        names = f.read(struct.unpack_from("<I", head, 12)[0])
+                        for i in range(n):
+                            no, off, size, _t = struct.unpack_from("<IIII", ent, 16 * i)
+                            if names[no:names.index(b"\0", no)].decode("latin1").lower() == want:
+                                f.seek(off); os.makedirs(os.path.dirname(cache), exist_ok=True)
+                                with open(cache, "wb") as out: out.write(f.read(size))
+                                break
+                    if os.path.exists(cache): break
+            if os.path.exists(cache): winsound.PlaySound(cache, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        except Exception:
+            pass
+
+    def banner(self, text="Horde Becomes Stronger", secs=3.5):
+        self.thunder()
+        w = self.overlay("#d9d2c3", 0.93)
+        tk.Label(w, text=text.upper(), font=("Impact", 34, "bold"), fg="#7a0a0a", bg="#d9d2c3", padx=36, pady=8).pack()
+        w.update_idletasks()
+        ww, wh = w.winfo_reqwidth(), w.winfo_reqheight()
+        w.geometry("%dx%d+%d+%d" % (ww, wh, (w.winfo_screenwidth() - ww) // 2, int(w.winfo_screenheight() * 0.08)))
+        self.show_no_focus(w); w.after(int(secs * 1000), w.destroy)
+
+    def welcome(self):
+        from tkinter import font as tkfont
+        KEY = "#010101"; w = self.overlay(KEY, 0.0, transparent=True)
+        fams = {f.lower(): f for f in tkfont.families()}
+        face = next((fams[n] for n in ("chiller", "jokerman", "old english text mt", "impact") if n in fams), "Impact")
+        sw, sh = w.winfo_screenwidth(), w.winfo_screenheight()
+        cv = tk.Canvas(w, width=sw, height=int(sh * 0.40), bg=KEY, highlightthickness=0); cv.pack()
+        for text, y, size, col in (("WELCOME TO HORDE MODE", int(sh * 0.11), max(40, sh // 9), "#8a0b0b"),
+                                   ("GOOD LUCK", int(sh * 0.27), max(28, sh // 14), "#a31212")):
+            f = (face, size, "bold")
+            for dx, dy in ((-3, 3), (3, 3), (0, 5), (-3, -2), (3, -2)): cv.create_text(sw // 2 + dx, y + dy, text=text, font=f, fill="black")
+            cv.create_text(sw // 2, y, text=text, font=f, fill=col)
+        w.geometry("%dx%d+0+%d" % (sw, int(sh * 0.40), int(sh * 0.06))); self.show_no_focus(w)
+        t0 = time.time(); FI, HOLD, FO = 1.5, 4.0, 2.0
+        def tick():
+            t = time.time() - t0
+            if t >= FI + HOLD + FO: w.destroy(); return
+            a = t / FI if t < FI else 1.0 if t < FI + HOLD else 1 - (t - FI - HOLD) / FO
+            try: w.attributes("-alpha", max(0.0, min(0.95, a)))
+            except tk.TclError: return
+            w.after(40, tick)
+        tick()
+
+    def tier_label(self):
+        KEY = "#010101"; w = self.overlay(KEY, 0.85, transparent=True)
+        W, H = 260, 24
+        cv = tk.Canvas(w, width=W, height=H, bg=KEY, highlightthickness=0); cv.pack()
+        w.geometry("%dx%d+14+%d" % (W, H, max(0, (w.winfo_screenheight() - H) // 2)))
+        self.show_no_focus(w)
+        def draw(tier):
+            cv.delete("all")
+            text = "HORDE: %s" % tier.upper()
+            col = {"easiest": "#c9c2a8", "easy": "#d6c36a", "normal": "#e0993a", "hard": "#d9602b", "nightmare": "#d02a1f", "hell": "#ff2a1a"}.get(tier, "#d6c36a")
+            for dx, dy in ((-1, 1), (1, 1), (0, 2), (-1, -1), (1, -1)):
+                cv.create_text(6 + dx, H // 2 + dy, text=text, font=("Consolas", 11, "bold"), fill="black", anchor="w")
+            cv.create_text(6, H // 2, text=text, font=("Consolas", 11, "bold"), fill=col, anchor="w")
+        return w, draw
+
+    def hud_loop(self, addr):
+        """Joined Horde game: the welcome title, the tier label and the 'Horde Becomes Stronger' banner, driven by the
+        host's game (its /horde.json). Ends when the match is over or your game closes."""
+        t0 = time.time()
+        while not game_running() and time.time() - t0 < 180: time.sleep(2)
+        t0 = time.time()
+        while game_running() and not getattr(self, "on_team", False) and time.time() - t0 < 300: time.sleep(0.5)
+        if not game_running(): return
+        time.sleep(2.5)                                          # let the map appear first
+        self.after(0, self.welcome)
+        hud, shown, fails = [None], [None], 0
+        try:
+            while game_running():
+                try:
+                    st = json.load(self.fetch(addr, "/horde.json", 5)); fails = 0
+                except Exception:
+                    fails += 1
+                    if fails > 30: break                         # an old host without overlays (or it went away)
+                    time.sleep(1); continue
+                if st.get("over"): break
+                tier = st.get("tier")
+                if tier and tier != shown[0]:
+                    if shown[0] is not None: self.after(0, self.banner)
+                    shown[0] = tier
+                    def upd(t=tier):
+                        if hud[0] is None: hud[0] = self.tier_label()
+                        hud[0][1](t)
+                    self.after(0, upd)
+                time.sleep(1)
+        finally:
+            self.after(0, lambda: hud[0] and hud[0][0].destroy())
 
     def get_music(self, addr, entry):
         """The host's Horde music, kept in this app's folder (downloaded again only when the host's file changes)."""
@@ -822,6 +1025,11 @@ class App(tk.Tk):
         return None
 
     def auto_team(self, pid, team="red"):
+        self.on_team = False
+        try: return self._auto_team(pid, team)
+        finally: self.on_team = True                             # (also when it couldn't: the overlays may start)
+
+    def _auto_team(self, pid, team="red"):
         """Put your game on the Survivors (red) team as soon as its lobby shows (what the launcher's autojoin.py does):
         attach to the game, press Join Red once, let go when the match starts. If anything fails: pick it by hand."""
         LOBBY_STATE, PICK = 8, {"red": 3, "blue": 4}
@@ -860,6 +1068,7 @@ class App(tk.Tk):
                 elif lob.get("state") == LOBBY_STATE and lob.get("pick") not in (0, PICK[team]):
                     self.say("You picked a team yourself, so I left it."); return
                 elif presses and lob.get("state") != LOBBY_STATE and time.time() - pressed_at > 1.0:
+                    self.on_team = True
                     self.say("You're on the Survivors team. Good luck!"); return
             self.say("Gave up waiting for the lobby: pick the Survivors team by hand.")
         except Exception as e:
@@ -878,6 +1087,7 @@ class App(tk.Tk):
         for _ in range(20):
             if restore_files(): break
             time.sleep(3)
+        self.look_off()
         if self.session:
             self.say("Game closed. Your game folder is back as it was.")
         self.session = False
@@ -919,19 +1129,22 @@ class App(tk.Tk):
         Txt(cv, 36, 364, "Your character", H); self.put(self.h_char, X, 364, H)
         N = ("host_form", "normal")                               # a normal game's limits, in the same place (blank: none set)
         self.h_kills = tk.StringVar(value=self.cfg.get("h_kills", "")); self.h_time = tk.StringVar(value=self.cfg.get("h_time", ""))
-        Txt(cv, 36, 330, "Kill limit (blank = none set)", N)
-        self.put(ttk.Spinbox(self, from_=1, to=200, width=6, textvariable=self.h_kills), X, 330, N)
-        Txt(cv, 36, 364, "Time limit in minutes", N)
-        self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X, 364, N)
+        self.h_mode = ttk.Combobox(self, state="readonly", width=24)                          # only the map's own modes
+        Txt(cv, 36, 330, "Game mode", N); self.put(self.h_mode, X, 330, N)
+        Txt(cv, 36, 364, "Kill limit (blank = none set)", N)
+        self.put(ttk.Spinbox(self, from_=1, to=200, width=6, textvariable=self.h_kills), X, 364, N)
+        Txt(cv, 36, 398, "Time limit in minutes", N)
+        self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X, 398, N)
+        self.h_map.bind("<<ComboboxSelected>>", lambda e: self.mode_choices())
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
         self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Full screen")
-        Txt(cv, 36, 398, "Your screen", F); self.put(self.h_screen, X, 398, F)
+        Txt(cv, 36, 432, "Your screen", F); self.put(self.h_screen, X, 432, F)
         self.h_trim = tk.BooleanVar(value=self.cfg.get("h_trim", True))
-        self.trim_tick = Txt(cv, 36, 432, "", F, font=("Segoe UI Symbol", 10))
+        self.trim_tick = Txt(cv, 36, 466, "", F, font=("Segoe UI Symbol", 10))
         self.trim_tick.bind(lambda: (self.h_trim.set(not self.h_trim.get()), self.draw_ticks()))
         ram, cpu = hardware(); low = (ram and ram < 16) or cpu < 8
         self.low_pc = bool(low)
-        Txt(cv, 36, 452, (
+        Txt(cv, 36, 486, (
             "Every bot is a full copy of the game, so each one uses a lot of RAM and CPU. Hosting too many bots can slow or "
             "crash your game. Survival Horde grows to 10 bots. This PC: %s, %d CPU threads. %s" % (
                 ("%d GB RAM" % ram) if ram else "RAM unknown", cpu,
@@ -939,12 +1152,12 @@ class App(tk.Tk):
                 else "If the game stutters, lower the bots.")), F, fill=WARN if low else DIM, font=("Segoe UI", 9),
             width=WIN_W - 72, anchor="nw")
         self.host_btn = ttk.Button(self, text="START HOSTING", style="Big.TButton", command=self.host_toggle)
-        self.put(self.host_btn, 36, 552, F, width=WIN_W - 72 - CLOSE_W - 10)
+        self.put(self.host_btn, 36, 586, F, width=WIN_W - 72 - CLOSE_W - 10)
         self.close_btns.append(ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all))
-        self.put(self.close_btns[-1], WIN_W - 36, 552, F, anchor="e", width=CLOSE_W, height=48)
+        self.put(self.close_btns[-1], WIN_W - 36, 586, F, anchor="e", width=CLOSE_W, height=48)
         refresh = Txt(cv, 70, WIN_H - 28, "Refresh hosting toolkit", F, fill=DIM, font=("Segoe UI", 9, "underline"))
         refresh.bind(self.setup_toolkit)
-        self.addr_lbl = Txt(cv, 36, 588, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
+        self.addr_lbl = Txt(cv, 36, 622, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
         self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
         self.game_choice()
 
@@ -959,7 +1172,9 @@ class App(tk.Tk):
         horde = dict(GAMES).get(self.h_game.get()) == "horde"
         self.draw_ticks()
         if self.h_mapkind.get() == "Custom":
-            pairs = [(l, k) for l, k, m in custom_maps(self.game_dir(), self.toolkit()) if ("M" if horde else "D") in m]
+            found = custom_maps(self.game_dir(), self.toolkit())
+            self.map_modes = {k: m for _l, k, m in found}
+            pairs = [(l, k) for l, k, m in found if ("M" in m if horde else any(c in m for c in "DMCK"))]
         else:
             pairs = list(MAPS)
         self.map_keys = dict(pairs)
@@ -968,6 +1183,17 @@ class App(tk.Tk):
         names = [l for l, _ in pairs]; self.h_map.configure(values=names)
         want = self.cfg.get("h_map", "Dry Gulch")
         self.h_map.set(want if want in names else names[0])
+        self.mode_choices()
+
+    def mode_choices(self):
+        """Normal game: the Game mode list holds only the modes the chosen map has."""
+        if not hasattr(self, "h_mode"): return
+        key = self.map_keys.get(self.h_map.get())
+        letters = STD_MODES.get(key) or getattr(self, "map_modes", {}).get(key, "") or "D"
+        names = [n for n, c, _m in GAME_MODES if c in letters] or ["Deathmatch"]
+        self.h_mode.configure(values=names)
+        cur = self.h_mode.get() or self.cfg.get("h_mode", "Deathmatch")
+        self.h_mode.set(cur if cur in names else names[0])
 
     def game_choice(self):
         """Grey out what the chosen game ignores: Horde picks its own bot count and level; Horde mode is Horde-only."""
@@ -1063,11 +1289,12 @@ class App(tk.Tk):
         elif self.h_bots.get() > 2 or self.low_pc:
             if not messagebox.askyesno(APP, "Each bot uses a lot of RAM and CPU (it is a full game window).\n\n"
                                        "With %d bots on a PC that isn't powerful, the game can slow down or crash. Keep the number low if unsure.\n\nHost anyway?" % self.h_bots.get()): return
-        cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": kind, "map": map_key,
+        mode = "horde" if kind == "horde" else {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get(), "dm")
+        cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": mode, "map": map_key,
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
                "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), **lim}
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get())); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get()); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
@@ -1166,6 +1393,7 @@ class App(tk.Tk):
             else:
                 ok = False
             self.session = False
+            self.look_off()                                      # the Survival look a join put into Common.kpf
             tkd = self.toolkit(); py = os.path.join(tkd, ".venv", "Scripts", "python.exe")
             if os.path.exists(os.path.join(tkd, "companionhost.py")) and os.path.exists(py):      # mods a hosted game installed
                 r = subprocess.run([py, os.path.join(tkd, "companionhost.py"), "--cleanup"], cwd=tkd, capture_output=True,
