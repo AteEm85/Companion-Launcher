@@ -28,7 +28,7 @@ jobs:
               cur = pub + 1
               src = re.sub(r"^VERSION = \d+", "VERSION = %d" % cur, src, count=1, flags=re.M)
               open("companion.py", "w", encoding="utf-8", newline="").write(src)
-          open(os.environ["GITHUB_ENV"], "a").write("VER=%d\n" % cur)
+          open(os.environ["GITHUB_ENV"], "a").write("VER=%d\nVERTXT=v%d.%02d\n" % ((cur,) + divmod(cur, 100)))
           print("building version", cur)
       - name: Build
         run: |
@@ -44,5 +44,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
           git add companion.py companion/version.txt companion/OutlawsCompanion.exe
-          git commit -m "Build Outlaws Companion v$env:VER [skip ci]"
+          git commit -m "Build Outlaws Companion $env:VERTXT [skip ci]"
           git push

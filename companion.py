@@ -103,6 +103,10 @@ def zt_ip():
         return out.splitlines()[0] if out else None
     except Exception: return None
 
+def vtext(n):
+    """How a version number is shown: 13 -> v0.13, 120 -> v1.20."""
+    n = int(n); return "v%d.%02d" % divmod(n, 100)
+
 def zt_broadcast():
     """The ZeroTier subnet's own broadcast address (e.g. 10.147.17.255), or None. Windows does not always send the
     all-ones broadcast (255.255.255.255) out of the ZeroTier adapter, so discovery sends to both."""
@@ -317,7 +321,7 @@ class App(tk.Tk):
         self.log_box = tk.Text(self, height=7, bg="#140d08", fg=TXT, insertbackground=TXT, relief="flat", bd=0, state="disabled",
                                font=("Consolas", 9), highlightthickness=1, highlightbackground=EDGE, highlightcolor=EDGE)
         cv.create_window(12, PANEL_END + 10, window=self.log_box, anchor="nw", width=WIN_W - 24, height=118)
-        Txt(cv, 16, WIN_H - 28, "v%d" % VERSION, fill=DIM)
+        Txt(cv, 16, WIN_H - 28, vtext(VERSION), fill=DIM)
         self.upd_btn = ttk.Button(self, text="Update Launcher", command=self.update_launcher)
         cv.create_window(WIN_W - 12, WIN_H - 28, window=self.upd_btn, anchor="e")
         self.tab = "join"; self.have_toolkit = False
@@ -534,8 +538,8 @@ class App(tk.Tk):
         try:
             num = int(self.gh("version.txt", 15).read().decode().split()[0])
             if num > VERSION:
-                self.after(0, lambda: self.upd_btn.configure(text="Update available (v%d)" % num))
-                self.say("A new launcher version (v%d) is on GitHub: press Update available to install it." % num)
+                self.after(0, lambda: self.upd_btn.configure(text="Update available (%s)" % vtext(num)))
+                self.say("A new launcher version (%s) is on GitHub: press Update available to install it." % vtext(num))
         except Exception:
             pass
 
@@ -551,12 +555,12 @@ class App(tk.Tk):
             except Exception as e:
                 self.say("Could not reach the update source (%s). If the repository is still private, updates start working once it is public." % e); return
             if int(num) <= VERSION:
-                self.say("Your launcher is up to date (version %d)." % VERSION); return
+                self.say("Your launcher is up to date (%s)." % vtext(VERSION)); return
             if game_running() or self.session:
-                self.say("Version %s is available. Close the game first, then press Update Launcher." % num); return
+                self.say("%s is available. Close the game first, then press Update Launcher." % vtext(num)); return
             if not getattr(sys, "frozen", False):
                 self.update_source(num); return
-            self.say("Downloading version %s..." % num)
+            self.say("Downloading %s..." % vtext(num))
             exe = sys.executable; new = exe + ".new"
             with self.gh("OutlawsCompanion.exe", 120) as r, open(new, "wb") as f: shutil.copyfileobj(r, f)
             if sha256(new) != sha.lower():
@@ -578,7 +582,7 @@ class App(tk.Tk):
         """Running companion.py itself: fetch the new companion.py from GitHub, rebuild the exe (build_companion.cmd)
         when this folder has it, and restart."""
         me = os.path.abspath(__file__); new = me + ".new"
-        self.say("Downloading version %s (source)..." % num)
+        self.say("Downloading %s (source)..." % vtext(num))
         with self.gh("companion.py", 60, root=True) as r, open(new, "wb") as f: shutil.copyfileobj(r, f)
         try:
             compile(open(new, encoding="utf-8").read(), new, "exec")
