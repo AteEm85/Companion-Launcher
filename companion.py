@@ -728,8 +728,9 @@ class App(tk.Tk):
         self.h_level = ttk.Combobox(self, values=LEVELS, state="readonly", width=24); self.h_level.set(self.cfg.get("h_level", "Normal"))
         Txt(cv, 36, 296, "Bot level", F); self.put(self.h_level, X, 296, F)
         H = ("host_form", "hmode")
-        self.h_hmode = ttk.Combobox(self, values=["Normal", "Challenge", "Dark Mode"], state="readonly", width=24)
-        self.h_hmode.set(self.cfg.get("h_hmode", "Normal"))
+        HMODES = ["Normal", "Challenge"]                          # Dark Mode: held back until it's ready for the companion
+        self.h_hmode = ttk.Combobox(self, values=HMODES, state="readonly", width=24)
+        self.h_hmode.set(self.cfg.get("h_hmode") if self.cfg.get("h_hmode") in HMODES else "Normal")
         Txt(cv, 36, 330, "Horde mode", H); self.put(self.h_hmode, X, 330, H)
         self.h_play = tk.BooleanVar(value=True)
         self.play_tick = Txt(cv, 36, 364, "", F, font=("Segoe UI Symbol", 10))
