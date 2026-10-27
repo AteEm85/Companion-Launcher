@@ -33,8 +33,8 @@ MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "f
 GAMES = [("Survival Horde", "horde"), ("Normal bot game", "dm")]
 LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare"]
 PARCH, INK, RUST = "#f1e4c3", "#3b2a1a", "#b5530f"
-WIN_W, WIN_H = 580, 760
-PANEL_END = 572
+WIN_W, WIN_H = 580, 790
+PANEL_END = 602
 DARK, TXT, DIM, GOLD, WARN, EDGE = "#120b07", "#f6ead0", "#cdb994", "#f2b24a", "#ff9e6e", "#7a5a32"   # on the dark picture
 BTN, BTN_HOT, BTN_EDGE = "#8a3b12", "#a84a18", "#4a1e08"
 
@@ -799,12 +799,15 @@ class App(tk.Tk):
         self.h_char = ttk.Combobox(self, values=CHARS, state="readonly", width=24)            # yours, in a Horde game
         self.h_char.set(self.cfg.get("h_char") if self.cfg.get("h_char") in CHARS else CHARS[0])
         Txt(cv, 36, 364, "Your character", H); self.put(self.h_char, X, 364, H)
+        self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
+        self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Borderless window")
+        Txt(cv, 36, 398, "Your screen", F); self.put(self.h_screen, X, 398, F)
         self.h_play = tk.BooleanVar(value=True)
-        self.play_tick = Txt(cv, 36, 398, "", F, font=("Segoe UI Symbol", 10))
+        self.play_tick = Txt(cv, 36, 432, "", F, font=("Segoe UI Symbol", 10))
         self.play_tick.bind(lambda: (self.h_play.set(not self.h_play.get()), self.draw_ticks()))
         ram, cpu = hardware(); low = (ram and ram < 16) or cpu < 8
         self.low_pc = bool(low)
-        Txt(cv, 36, 418, (
+        Txt(cv, 36, 452, (
             "Every bot is a full copy of the game, so each one uses a lot of RAM and CPU. Hosting too many bots can slow or "
             "crash your game. Survival Horde grows to 10 bots. This PC: %s, %d CPU threads. %s" % (
                 ("%d GB RAM" % ram) if ram else "RAM unknown", cpu,
@@ -812,8 +815,8 @@ class App(tk.Tk):
                 else "If the game stutters, lower the bots.")), F, fill=WARN if low else DIM, font=("Segoe UI", 9),
             width=WIN_W - 72, anchor="nw")
         self.host_btn = ttk.Button(self, text="START HOSTING", style="Big.TButton", command=self.host_toggle)
-        self.put(self.host_btn, 36, 520, F, width=WIN_W - 72)
-        self.addr_lbl = Txt(cv, 36, 556, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
+        self.put(self.host_btn, 36, 552, F, width=WIN_W - 72)
+        self.addr_lbl = Txt(cv, 36, 588, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
         self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
         self.game_choice()
 
@@ -915,7 +918,7 @@ class App(tk.Tk):
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
                "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player"}
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get()); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get()); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
@@ -937,7 +940,7 @@ class App(tk.Tk):
                     joined = True; self.say("The game is up: friends can join now.")
                     if play:
                         game = self.game_dir()
-                        cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies", "-join", "127.0.0.1"] + SCREENS.get(self.screen.get(), [])
+                        cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies", "-join", "127.0.0.1"] + SCREENS.get(self.h_screen.get(), [])
                         char = self.h_char.get() if kind == "horde" else self.char.get()
                         if char in CHARS: cmd += ["-setvar", "mp_defaultChar", str(CHARS.index(char) + 1)]
                         try:
