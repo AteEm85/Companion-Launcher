@@ -33,7 +33,8 @@ MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "f
 GAMES = [("Survival Horde", "horde"), ("Normal bot game", "dm")]
 LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare"]
 PARCH, INK, RUST = "#f1e4c3", "#3b2a1a", "#b5530f"
-WIN_W, WIN_H = 580, 730
+WIN_W, WIN_H = 580, 760
+PANEL_END = 572
 DARK, TXT, DIM, GOLD, WARN, EDGE = "#120b07", "#f6ead0", "#cdb994", "#f2b24a", "#ff9e6e", "#7a5a32"   # on the dark picture
 BTN, BTN_HOT, BTN_EDGE = "#8a3b12", "#a84a18", "#4a1e08"
 
@@ -290,7 +291,7 @@ class App(tk.Tk):
             self.bg_img = tk.PhotoImage(data=companion_bg.PNG); cv.create_image(0, 0, image=self.bg_img, anchor="nw")
         except Exception:
             self.bg_img = None
-        cv.create_rectangle(12, 104, WIN_W - 12, 542, outline=EDGE)                      # the panel the tabs share
+        cv.create_rectangle(12, 104, WIN_W - 12, PANEL_END, outline=EDGE)                      # the panel the tabs share
         Txt(cv, WIN_W // 2, 30, "OUTLAWS COMPANION", fill=GOLD, font=("Georgia", 20, "bold"), anchor="center")
         self.folder_lbl = Txt(cv, WIN_W // 2, 58, "", fill=DIM, font=("Segoe UI", 9), anchor="center")
         self.tabs = {}
@@ -300,7 +301,7 @@ class App(tk.Tk):
         self.tab_line = cv.create_line(28, 99, 128, 99, fill=GOLD, width=3)
         self.log_box = tk.Text(self, height=7, bg="#140d08", fg=TXT, insertbackground=TXT, relief="flat", bd=0, state="disabled",
                                font=("Consolas", 9), highlightthickness=1, highlightbackground=EDGE, highlightcolor=EDGE)
-        cv.create_window(12, 552, window=self.log_box, anchor="nw", width=WIN_W - 24, height=118)
+        cv.create_window(12, PANEL_END + 10, window=self.log_box, anchor="nw", width=WIN_W - 24, height=118)
         Txt(cv, 16, WIN_H - 28, "v%d" % VERSION, fill=DIM)
         self.upd_btn = ttk.Button(self, text="Update Launcher", command=self.update_launcher)
         cv.create_window(WIN_W - 12, WIN_H - 28, window=self.upd_btn, anchor="e")
@@ -569,8 +570,9 @@ class App(tk.Tk):
             os.remove(new); self.say("The downloaded companion.py is broken (%s); nothing changed." % e); return
         shutil.copyfile(me, me + ".bak"); os.replace(new, me)
         try:                                                   # the background picture lives beside it
-            with self.gh("companion_bg.py", 60, root=True) as r: data = r.read()
-            with open(os.path.join(os.path.dirname(me), "companion_bg.py"), "wb") as f: f.write(data)
+            for extra in ("companion_bg.py", "input_agent.js"):
+                with self.gh(extra, 60, root=True) as r: data = r.read()
+                with open(os.path.join(os.path.dirname(me), extra), "wb") as f: f.write(data)
         except Exception: pass
         build = os.path.join(os.path.dirname(me), "build_companion.cmd")
         if os.path.exists(build):
@@ -594,8 +596,8 @@ class App(tk.Tk):
         self.put(self.join_btn, 36, 238, T, width=WIN_W - 72)
         Txt(cv, 36, 280, (
             "Any mods the game needs are downloaded and installed for you, and removed again when you close the game. "
-            "When your game opens, choose LAN > Join Game and pick the host's game from the list. "
-            "In a Survival Horde game, pick the Survivors team in the lobby."), T, fill=DIM, width=WIN_W - 72, anchor="nw")
+            "Your game joins the host's game by itself, as the character picked above. "
+            "In a Survival Horde game you are put on the Survivors team for you."), T, fill=DIM, width=WIN_W - 72, anchor="nw")
 
     def join(self):
         if self.busy: return
@@ -642,7 +644,7 @@ class App(tk.Tk):
             if addr is False: self.say("Joining cancelled."); return
             if not addr:
                 self.say("No hosted game found, so no mods were installed. Opening the game anyway: use LAN > Join Game.")
-            game = self.game_dir(); items = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_")
+            game = self.game_dir(); items = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""
             try:
                 if not addr: raise OSError("no host")
                 man = None
@@ -653,6 +655,7 @@ class App(tk.Tk):
                         self.say("The host is still getting its mods ready; asking again..."); time.sleep(5)
                 self.cfg["last_host"] = addr; save(self.cfg)
                 self.say("Connected to %s: %s on %s" % (man.get("name", "host"), man.get("mode") or "game", man.get("map") or "?"))
+                mode = man.get("mode") or ""
                 for mod in man.get("mods", []):
                     todo = []
                     for fl in mod.get("files", []):
@@ -679,16 +682,77 @@ class App(tk.Tk):
                 if addr: self.say("Could not ask the host for mods (%s); joining without." % e)
                 items = []
             cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies"] + SCREENS.get(self.screen.get(), [])
+            if addr: cmd += ["-join", addr]                     # straight into the host's game
             if self.char.get() in CHARS: cmd += ["-setvar", "mp_defaultChar", str(CHARS.index(self.char.get()) + 1)]
-            try: subprocess.Popen(cmd, cwd=game)
+            try: me = subprocess.Popen(cmd, cwd=game)
             except OSError as e:
                 self.say("Could not start the game: %s" % e); restore_files(); self.session = False; return
-            self.say("Game starting. Choose LAN > Join Game and pick the host's game from the list.")
+            if addr and mode in ("horde", "dark"):
+                self.say("Game starting: it joins the host's Survival Horde game and the Survivors team by itself.")
+                threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
+            elif addr:
+                self.say("Game starting: it joins the host's game by itself.")
+            else:
+                self.say("Game starting. Choose LAN > Join Game and pick the host's game from the list.")
             self.wait_and_restore(True)
             shutil.rmtree(tmp, ignore_errors=True)
         finally:
             self.busy = False
             self.after(0, lambda: self.join_btn.configure(text="JOIN GAME", state="normal"))
+
+    def agent_source(self):
+        """input_agent.js (the bot toolkit's game agent; knows the Steam and the GOG game): built into the exe, or
+        beside companion.py, or in the toolkit folder."""
+        for d in (getattr(sys, "_MEIPASS", ""), os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__)),
+                  self.toolkit()):
+            p = os.path.join(d, "input_agent.js")
+            if d and os.path.exists(p):
+                with open(p, encoding="utf-8") as f: return f.read()
+        return None
+
+    def auto_team(self, pid, team="red"):
+        """Put your game on the Survivors (red) team as soon as its lobby shows (what the launcher's autojoin.py does):
+        attach to the game, press Join Red once, let go when the match starts. If anything fails: pick it by hand."""
+        LOBBY_STATE, PICK = 8, {"red": 3, "blue": 4}
+        try:
+            import frida
+        except ImportError:
+            self.say("Pick the Survivors team in the lobby (this copy can't do it for you)."); return
+        js = self.agent_source()
+        if not js:
+            self.say("Pick the Survivors team in the lobby (the game agent is missing)."); return
+        session, end = None, time.time() + 150
+        while time.time() < end:                                # the game may still be starting
+            try: session = frida.get_local_device().attach(pid); break
+            except Exception: time.sleep(1.0)
+        if session is None:
+            self.say("Couldn't reach your game to pick the team: pick Survivors (red) in the lobby."); return
+        script = None
+        try:
+            script = session.create_script(js); script.on("message", lambda m, d: None); script.load()
+            api = script.exports_sync
+            pressed_at, presses, seen = 0.0, 0, None
+            deadline = time.time() + 20 * 60
+            while time.time() < deadline:
+                time.sleep(0.5)
+                try: lob = api.lobby()
+                except Exception:
+                    if not game_running(): return
+                    continue
+                if lob and lob.get("state") == LOBBY_STATE and lob.get("pick") == 0:
+                    seen = seen or time.time()
+                    if time.time() - seen >= 2.0 and time.time() - pressed_at >= 3.0 and presses < 20:
+                        api.lobby_join(PICK[team]); pressed_at, presses = time.time(), presses + 1
+                elif presses and lob and lob.get("state") != LOBBY_STATE and time.time() - pressed_at > 3.0:
+                    self.say("You're on the Survivors team. Good luck!"); return
+            self.say("Gave up waiting for the lobby: pick the Survivors team by hand.")
+        except Exception as e:
+            self.say("Couldn't pick the team for you (%s): pick Survivors (red) in the lobby." % e)
+        finally:
+            try:
+                if script: script.unload()
+                session.detach()
+            except Exception: pass
 
     def wait_and_restore(self, start_wait):
         t0 = time.time()
@@ -732,12 +796,15 @@ class App(tk.Tk):
         self.h_hmode = ttk.Combobox(self, values=HMODES, state="readonly", width=24)
         self.h_hmode.set(self.cfg.get("h_hmode") if self.cfg.get("h_hmode") in HMODES else "Normal")
         Txt(cv, 36, 330, "Horde mode", H); self.put(self.h_hmode, X, 330, H)
+        self.h_char = ttk.Combobox(self, values=CHARS, state="readonly", width=24)            # yours, in a Horde game
+        self.h_char.set(self.cfg.get("h_char") if self.cfg.get("h_char") in CHARS else CHARS[0])
+        Txt(cv, 36, 364, "Your character", H); self.put(self.h_char, X, 364, H)
         self.h_play = tk.BooleanVar(value=True)
-        self.play_tick = Txt(cv, 36, 364, "", F, font=("Segoe UI Symbol", 10))
+        self.play_tick = Txt(cv, 36, 398, "", F, font=("Segoe UI Symbol", 10))
         self.play_tick.bind(lambda: (self.h_play.set(not self.h_play.get()), self.draw_ticks()))
         ram, cpu = hardware(); low = (ram and ram < 16) or cpu < 8
         self.low_pc = bool(low)
-        Txt(cv, 36, 384, (
+        Txt(cv, 36, 418, (
             "Every bot is a full copy of the game, so each one uses a lot of RAM and CPU. Hosting too many bots can slow or "
             "crash your game. Survival Horde grows to 10 bots. This PC: %s, %d CPU threads. %s" % (
                 ("%d GB RAM" % ram) if ram else "RAM unknown", cpu,
@@ -745,8 +812,8 @@ class App(tk.Tk):
                 else "If the game stutters, lower the bots.")), F, fill=WARN if low else DIM, font=("Segoe UI", 9),
             width=WIN_W - 72, anchor="nw")
         self.host_btn = ttk.Button(self, text="START HOSTING", style="Big.TButton", command=self.host_toggle)
-        self.put(self.host_btn, 36, 486, F, width=WIN_W - 72)
-        self.addr_lbl = Txt(cv, 36, 524, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
+        self.put(self.host_btn, 36, 520, F, width=WIN_W - 72)
+        self.addr_lbl = Txt(cv, 36, 556, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
         self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
         self.game_choice()
 
@@ -848,7 +915,7 @@ class App(tk.Tk):
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
                "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player"}
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get()); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get()); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
@@ -871,7 +938,15 @@ class App(tk.Tk):
                     if play:
                         game = self.game_dir()
                         cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies", "-join", "127.0.0.1"] + SCREENS.get(self.screen.get(), [])
-                        try: subprocess.Popen(cmd, cwd=game); self.say("Your own game is starting.")
+                        char = self.h_char.get() if kind == "horde" else self.char.get()
+                        if char in CHARS: cmd += ["-setvar", "mp_defaultChar", str(CHARS.index(char) + 1)]
+                        try:
+                            me = subprocess.Popen(cmd, cwd=game)
+                            if kind == "horde":
+                                self.say("Your game is starting as %s and joins the Survivors team by itself." % char)
+                                threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
+                            else:
+                                self.say("Your own game is starting.")
                         except OSError as e: self.say("Could not start your game: %s" % e)
         p.wait()
         self.say("Hosting ended.")

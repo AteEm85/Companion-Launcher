@@ -11,8 +11,8 @@ if not exist "%B%\Scripts\python.exe" (
     py -3 -m venv "%B%" 2>nul || python -m venv "%B%" || (echo Python 3 not found; install it from python.org & pause & exit /b 1)
 )
 "%B%\Scripts\python.exe" -c "import tkinter" || (echo This Python has no tkinter; reinstall Python from python.org with "tcl/tk" ticked & pause & exit /b 1)
-"%B%\Scripts\python.exe" -m pip install -q --disable-pip-version-check pyinstaller || (echo could not install pyinstaller & pause & exit /b 1)
-"%B%\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --icon "%~dp0launcher.ico" --name OutlawsCompanion --distpath "%~dp0." --workpath "%B%\work_c" --specpath "%B%" companion.py || (pause & exit /b 1)
+"%B%\Scripts\python.exe" -m pip install -q --disable-pip-version-check pyinstaller frida==17.18.0 || (echo could not install pyinstaller & pause & exit /b 1)
+"%B%\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --icon "%~dp0launcher.ico" --collect-all frida --add-data "%~dp0input_agent.js;." --name OutlawsCompanion --distpath "%~dp0." --workpath "%B%\work_c" --specpath "%B%" companion.py || (pause & exit /b 1)
 echo.
 rem Publish folder: the Update Launcher button in the companion reads companion\version.txt + companion\OutlawsCompanion.exe from GitHub.
 if not exist "%~dp0companion" mkdir "%~dp0companion"
