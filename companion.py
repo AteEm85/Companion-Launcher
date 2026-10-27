@@ -229,6 +229,14 @@ class App(tk.Tk):
         st.configure("TNotebook", background=PARCH); st.configure("TFrame", background=PARCH)
         st.configure("TLabel", background=PARCH); st.configure("TCheckbutton", background=PARCH)
         st.configure("Big.TButton", font=("Segoe UI", 13, "bold"), padding=10)
+        # Boxes you can change are white; boxes the chosen game ignores are grey, arrow included.
+        GREY, GREY_TXT = "#d6cfbd", "#8f8571"
+        for w in ("TCombobox", "TSpinbox"):
+            st.configure(w, fieldbackground="white", arrowcolor=INK)
+            st.map(w, fieldbackground=[("disabled", GREY), ("readonly", "white"), ("!disabled", "white")],
+                   background=[("disabled", GREY)], foreground=[("disabled", GREY_TXT)],
+                   arrowcolor=[("disabled", GREY_TXT)], selectbackground=[("disabled", GREY), ("readonly", "white")],
+                   selectforeground=[("disabled", GREY_TXT), ("readonly", INK)])
         tk.Label(self, text="OUTLAWS COMPANION", bg=PARCH, fg=RUST, font=("Georgia", 18, "bold")).pack(pady=(10, 0))
         self.folder_lbl = ttk.Label(self, foreground="#7a6a52"); self.folder_lbl.pack()
         bar = ttk.Frame(self); bar.pack(side="bottom", fill="x", padx=12, pady=(0, 10))   # bottom row: version, update
