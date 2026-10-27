@@ -855,11 +855,8 @@ class App(tk.Tk):
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
         self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Borderless window")
         Txt(cv, 36, 398, "Your screen", F); self.put(self.h_screen, X, 398, F)
-        self.h_play = tk.BooleanVar(value=True)
-        self.play_tick = Txt(cv, 36, 432, "", F, font=("Segoe UI Symbol", 10))
-        self.play_tick.bind(lambda: (self.h_play.set(not self.h_play.get()), self.draw_ticks()))
         self.h_trim = tk.BooleanVar(value=self.cfg.get("h_trim", True))
-        self.trim_tick = Txt(cv, X, 432, "", F, font=("Segoe UI Symbol", 10))
+        self.trim_tick = Txt(cv, 36, 432, "", F, font=("Segoe UI Symbol", 10))
         self.trim_tick.bind(lambda: (self.h_trim.set(not self.h_trim.get()), self.draw_ticks()))
         ram, cpu = hardware(); low = (ram and ram < 16) or cpu < 8
         self.low_pc = bool(low)
@@ -883,7 +880,6 @@ class App(tk.Tk):
     def draw_ticks(self):
         for t, tick in self.kind_ticks.items():
             tick.configure(text=("◉ " if self.h_mapkind.get() == t else "○ ") + t)
-        self.play_tick.configure(text=("☑ " if self.h_play.get() else "☐ ") + "I play too")
         self.trim_tick.configure(text=("☑ " if self.h_trim.get() else "☐ ") + "Trim Idle Bot Memory (Lowers RAM Usage)")
 
     def map_choices(self):
@@ -992,7 +988,7 @@ class App(tk.Tk):
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
-        threading.Thread(target=self.host_work, args=(jf, self.h_play.get(), kind), daemon=True).start()
+        threading.Thread(target=self.host_work, args=(jf, True, kind), daemon=True).start()
 
     def host_work(self, jf, play, kind):
         if not self.ensure_zerotier():
