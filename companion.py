@@ -607,7 +607,7 @@ class App(tk.Tk):
         self.char.set(self.cfg.get("char", "(pick in game)")); self.put(self.char, 210, 140, T)
         Txt(cv, 36, 178, "Screen", T)
         self.screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=22)
-        self.screen.set(self.cfg.get("screen", "Borderless window")); self.put(self.screen, 210, 178, T)
+        self.screen.set(self.cfg.get("screen") if self.cfg.get("screen") in SCREENS else "Full screen"); self.put(self.screen, 210, 178, T)
         self.join_btn = ttk.Button(self, text="JOIN GAME", style="Big.TButton", command=self.join)
         self.put(self.join_btn, 36, 238, T, width=WIN_W - 72 - CLOSE_W - 10)
         self.close_btns = [ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all)]
@@ -853,7 +853,7 @@ class App(tk.Tk):
         Txt(cv, 36, 364, "Time limit in minutes", N)
         self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X, 364, N)
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
-        self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Borderless window")
+        self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Full screen")
         Txt(cv, 36, 398, "Your screen", F); self.put(self.h_screen, X, 398, F)
         self.h_trim = tk.BooleanVar(value=self.cfg.get("h_trim", True))
         self.trim_tick = Txt(cv, 36, 432, "", F, font=("Segoe UI Symbol", 10))
