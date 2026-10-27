@@ -326,7 +326,8 @@ class App(tk.Tk):
             pass
         cv.create_rectangle(12, 104, WIN_W - 12, PANEL_END, outline=EDGE)                      # the panel the tabs share
         Txt(cv, WIN_W // 2, 30, "OUTLAWS COMPANION", fill=GOLD, font=("Georgia", 20, "bold"), anchor="center")
-        self.folder_lbl = Txt(cv, WIN_W // 2, 58, "", fill=DIM, font=("Segoe UI", 9), anchor="center")
+        self.folder_lbl = Txt(cv, WIN_W // 2, 58, "", fill=DIM, font=("Segoe UI", 9, "underline"), anchor="center")
+        self.folder_lbl.bind(lambda: self.pick_folder())          # click the game folder to pick another one
         self.tabs = {}
         for i, (key, label) in enumerate((("join", "Join a game"), ("host", "Host a game"))):
             t = Txt(cv, 28 + i * 150, 86, label, font=("Segoe UI", 12, "bold"))
@@ -420,9 +421,27 @@ class App(tk.Tk):
                 self.say("Could not fully restore some files; close the game and restart this app.")
         self.refresh_host()
         self.note("started %s from %s" % (vtext(VERSION), sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)))
+        threading.Thread(target=self.desktop_shortcut, daemon=True).start()
         threading.Thread(target=self.check_update_quiet, daemon=True).start()
         if zt_state() != "missing":
             threading.Thread(target=self.ensure_zerotier, daemon=True).start()
+
+    def desktop_shortcut(self):
+        """'Outlaws Companion' on the desktop, with this app's icon, always starting THIS copy (an old shortcut to an
+        older download is pointed here instead, so an update is never 'lost' by opening another copy)."""
+        if not getattr(sys, "frozen", False): return
+        exe = sys.executable.replace("'", "''")
+        ps = ("$d=[Environment]::GetFolderPath('Desktop'); $l=Join-Path $d 'Outlaws Companion.lnk'; $s=(New-Object -ComObject WScript.Shell).CreateShortcut($l); "
+              "if ($s.TargetPath -ne '%s' -or $s.IconLocation -ne '%s,0') { $s.TargetPath='%s'; $s.WorkingDirectory=(Split-Path '%s'); "
+              "$s.IconLocation='%s,0'; $s.Description='Outlaws Companion'; $s.Save(); 'updated' }" % (exe, exe, exe, exe, exe))
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                               timeout=30, creationflags=NO_WINDOW)
+            if "updated" in (r.stdout or ""):
+                self.note("desktop shortcut set to %s" % sys.executable)
+                subprocess.run(["ie4uinit.exe", "-show"], capture_output=True, timeout=30, creationflags=NO_WINDOW)   # refresh icons
+        except Exception:
+            pass
 
     def pick_folder(self, first=False):
         if first:
@@ -798,6 +817,7 @@ class App(tk.Tk):
             try: me = subprocess.Popen(cmd, cwd=game)
             except OSError as e:
                 self.say("Could not start the game: %s" % e); restore_files(); self.session = False; return
+            threading.Thread(target=self.check_game_folder, args=(game,), daemon=True).start()
             if addr and mode in ("horde", "dark"):
                 self.say("Game starting: it joins the host's Survival Horde game and the Survivors team by itself.")
                 threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
@@ -1052,24 +1072,34 @@ class App(tk.Tk):
             api = script.exports_sync
             # Press Join Red the moment the lobby shows, and keep pressing (every 0.8 s) until the game has taken it:
             # a press that lands while you are moving the mouse over the team buttons doesn't stop the next one.
-            pressed_at, presses, seen = 0.0, 0, None
+            # Joining over the network the lobby can close and open again while it sets up, so: wait until it has been
+            # up for 1.5 s, press Join Red, press again whenever it is back without a pick, and only call it done once
+            # the lobby has stayed closed for 4 s (the match has started).
+            pressed_at, presses, seen, out_since = 0.0, 0, None, None
             deadline = time.time() + 20 * 60
             while time.time() < deadline:
-                time.sleep(0.2)
+                time.sleep(0.25)
                 try: lob = api.lobby()
                 except Exception:
                     if not game_running(): return
                     continue
                 if not lob: continue
-                if lob.get("state") == LOBBY_STATE and lob.get("pick") == 0:
-                    seen = seen or time.time()
-                    if time.time() - seen >= 0.3 and time.time() - pressed_at >= 0.8:
-                        api.lobby_join(PICK[team]); pressed_at, presses = time.time(), presses + 1
-                elif lob.get("state") == LOBBY_STATE and lob.get("pick") not in (0, PICK[team]):
-                    self.say("You picked a team yourself, so I left it."); return
-                elif presses and lob.get("state") != LOBBY_STATE and time.time() - pressed_at > 1.0:
-                    self.on_team = True
-                    self.say("You're on the Survivors team. Good luck!"); return
+                if lob.get("state") == LOBBY_STATE:
+                    out_since = None
+                    if lob.get("pick") == 0:
+                        seen = seen or time.time()
+                        if time.time() - seen >= 1.5 and time.time() - pressed_at >= 1.0:
+                            api.lobby_join(PICK[team]); pressed_at, presses = time.time(), presses + 1
+                            self.note("auto team: pressed Join Red (%d)" % presses)
+                    elif lob.get("pick") != PICK[team] and not presses:
+                        self.say("You picked a team yourself, so I left it."); return
+                else:
+                    seen = None
+                    if presses:
+                        out_since = out_since or time.time()
+                        if time.time() - out_since >= 4.0:
+                            self.on_team = True
+                            self.say("You're on the Survivors team. Good luck!"); return
             self.say("Gave up waiting for the lobby: pick the Survivors team by hand.")
         except Exception as e:
             self.say("Couldn't pick the team for you (%s): pick Survivors (red) in the lobby." % e)
@@ -1331,6 +1361,30 @@ class App(tk.Tk):
         self.say("Hosting ended.")
         self.host_cleanup()
         self.after(0, lambda: (self.host_btn.configure(text="START HOSTING"), self.addr_lbl.configure(text="")))
+
+    def check_game_folder(self, game):
+        """The mods go into the companion's game folder. If Steam starts the game from another install instead, none of
+        them (nor the character or the direct join) reach the game: find that out and say so plainly."""
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='OutlawsAHOM.exe'\" | ForEach-Object { '{0}|{1}' -f $_.ExecutablePath, $_.CommandLine }")
+        for _ in range(40):
+            time.sleep(3)
+            try:
+                out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                                     text=True, timeout=20, creationflags=NO_WINDOW).stdout
+            except Exception:
+                return
+            mine = [l.split("|", 1) for l in out.splitlines() if l.strip() and "-userpath" not in l]
+            if not mine: continue
+            exe, cmdline = mine[0][0].strip(), (mine[0][1] if len(mine[0]) > 1 else "")
+            self.note("game running from %s with: %s" % (exe, cmdline.strip()))
+            if exe and os.path.normcase(os.path.dirname(exe)) != os.path.normcase(os.path.normpath(game)):
+                self.say("Your game is running from %s, but the companion put the mods in %s. Pick the game's real "
+                         "folder by clicking the folder path under the title (Steam: right-click the game > Manage > Browse local files), "
+                         "then join again." % (os.path.dirname(exe), game))
+            elif "-join" not in cmdline:
+                self.say("Your game started without the companion's settings (Steam may have restarted it), so the "
+                         "mods, character and team may be missing. Start Steam first, then press Join again.")
+            return
 
     def own_game_running(self):
         """Is your own game (not a bot's copy: those run with -userpath) still open? None if Windows can't be asked."""
