@@ -800,19 +800,24 @@ class App(tk.Tk):
         try:
             script = session.create_script(js); script.on("message", lambda m, d: None); script.load()
             api = script.exports_sync
+            # Press Join Red the moment the lobby shows, and keep pressing (every 0.8 s) until the game has taken it:
+            # a press that lands while you are moving the mouse over the team buttons doesn't stop the next one.
             pressed_at, presses, seen = 0.0, 0, None
             deadline = time.time() + 20 * 60
             while time.time() < deadline:
-                time.sleep(0.5)
+                time.sleep(0.2)
                 try: lob = api.lobby()
                 except Exception:
                     if not game_running(): return
                     continue
-                if lob and lob.get("state") == LOBBY_STATE and lob.get("pick") == 0:
+                if not lob: continue
+                if lob.get("state") == LOBBY_STATE and lob.get("pick") == 0:
                     seen = seen or time.time()
-                    if time.time() - seen >= 2.0 and time.time() - pressed_at >= 3.0 and presses < 20:
+                    if time.time() - seen >= 0.3 and time.time() - pressed_at >= 0.8:
                         api.lobby_join(PICK[team]); pressed_at, presses = time.time(), presses + 1
-                elif presses and lob and lob.get("state") != LOBBY_STATE and time.time() - pressed_at > 3.0:
+                elif lob.get("state") == LOBBY_STATE and lob.get("pick") not in (0, PICK[team]):
+                    self.say("You picked a team yourself, so I left it."); return
+                elif presses and lob.get("state") != LOBBY_STATE and time.time() - pressed_at > 1.0:
                     self.say("You're on the Survivors team. Good luck!"); return
             self.say("Gave up waiting for the lobby: pick the Survivors team by hand.")
         except Exception as e:
