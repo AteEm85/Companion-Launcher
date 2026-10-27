@@ -557,9 +557,11 @@ class App(tk.Tk):
         self.addr_lbl = ttk.Label(f, text="", font=("Segoe UI", 11, "bold"), foreground=RUST); self.addr_lbl.grid(row=9, column=0, columnspan=2, sticky="w")
 
     def game_choice(self):
-        """Survival Horde adds its own bots (up to 10): the bot count is greyed out for it."""
+        """Grey out what the chosen game ignores: Horde picks its own bot count and level; Horde mode is Horde-only."""
         horde = dict(GAMES).get(self.h_game.get()) == "horde"
         self.h_bots_spin.state(["disabled"] if horde else ["!disabled"])
+        self.h_level.configure(state="disabled" if horde else "readonly")     # Horde raises the bots' level by itself
+        self.h_hmode.configure(state="readonly" if horde else "disabled")     # only a Horde game has a Horde mode
 
     def refresh_host(self):
         have = os.path.exists(os.path.join(self.toolkit(), "botctl.py"))
