@@ -330,9 +330,19 @@ class App(tk.Tk):
 
     # -- updates: the newest OutlawsCompanion.exe is kept in the repo's companion/ folder next to version.txt ("<number> <sha256>")
     def gh(self, name, timeout=30, root=False):
+        """A file from the GitHub repo. Asks GitHub's API first: raw.githubusercontent.com keeps old copies for about
+        five minutes, so right after a new build it still said the old version ("up to date")."""
+        path = name if root else "companion/" + name
+        tok = self.cfg.get("github_token")
+        api = urllib.request.Request("https://api.github.com/repos/%s/contents/%s?ref=%s" % (REPO, path, BRANCH),
+                                     headers={"User-Agent": "OutlawsCompanion", "Accept": "application/vnd.github.raw"})
+        if tok: api.add_header("Authorization", "token " + tok)
+        try:
+            return urllib.request.urlopen(api, timeout=timeout)
+        except Exception:                       # API rate limit (60 an hour) or unreachable: the raw file instead
+            pass
         url = ("https://raw.githubusercontent.com/%s/%s/" % (REPO, BRANCH) if root else RAW) + name
         req = urllib.request.Request(url + "?t=%d" % time.time(), headers={"User-Agent": "OutlawsCompanion", "Cache-Control": "no-cache"})
-        tok = self.cfg.get("github_token")
         if tok: req.add_header("Authorization", "token " + tok)
         return urllib.request.urlopen(req, timeout=timeout)
 
