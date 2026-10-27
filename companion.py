@@ -632,7 +632,7 @@ class App(tk.Tk):
         for r, (t, w) in enumerate([("Game", self.h_game), ("Map", self.h_map), ("# of Bots (For Normal Games)", self.h_bots_spin),
                                     ("Players, you included", ttk.Spinbox(f, from_=1, to=10, width=6, textvariable=self.h_users)), ("Bot level", self.h_level)]):
             ttk.Label(f, text=t).grid(row=r, column=0, **g); w.grid(row=r, column=1, padx=8, **g)
-        ttk.Label(f, text="Horde mode").grid(row=5, column=0, **g)
+        self.h_hmode_lbl = ttk.Label(f, text="Horde mode"); self.h_hmode_lbl.grid(row=5, column=0, **g)
         self.h_hmode = ttk.Combobox(f, values=["Normal", "Challenge", "Dark Mode"], state="readonly", width=22)
         self.h_hmode.set(self.cfg.get("h_hmode", "Normal")); self.h_hmode.grid(row=5, column=1, padx=8, **g)
         self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
@@ -655,7 +655,8 @@ class App(tk.Tk):
         horde = dict(GAMES).get(self.h_game.get()) == "horde"
         self.h_bots_spin.state(["disabled"] if horde else ["!disabled"])
         self.h_level.configure(state="disabled" if horde else "readonly")     # Horde raises the bots' level by itself
-        self.h_hmode.configure(state="readonly" if horde else "disabled")     # only a Horde game has a Horde mode
+        for w in (self.h_hmode_lbl, self.h_hmode):                            # only a Horde game has a Horde mode
+            w.grid() if horde else w.grid_remove()
 
     def refresh_host(self):
         have = os.path.exists(os.path.join(self.toolkit(), "botctl.py"))
