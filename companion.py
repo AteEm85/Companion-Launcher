@@ -359,6 +359,13 @@ class App(tk.Tk):
 
     # -- helpers
     def say(self, msg):
+        try:
+            os.makedirs(DATA, exist_ok=True)
+            lf = os.path.join(DATA, "companion_log.txt")
+            if os.path.exists(lf) and os.path.getsize(lf) > 512 * 1024: os.replace(lf, lf + ".old")
+            with open(lf, "a", encoding="utf-8") as f: f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + vtext(VERSION) + " " + msg.rstrip() + "\n")
+        except OSError:
+            pass
         def w():
             self.log_box.configure(state="normal"); self.log_box.insert("end", msg.rstrip() + "\n")
             self.log_box.see("end"); self.log_box.configure(state="disabled")
@@ -678,6 +685,12 @@ class App(tk.Tk):
                 self.cfg["last_host"] = addr; save(self.cfg)
                 self.say("Connected to %s: %s on %s" % (man.get("name", "host"), man.get("mode") or "game", man.get("map") or "?"))
                 mode = man.get("mode") or ""
+                self.say("Host's mods: %s%s" % (", ".join(m.get("title", "?") for m in man.get("mods", [])) or "none",
+                                                 "; music" if man.get("music") else ""))
+                if mode in ("horde", "dark") and not any(m.get("id") == "zombie_skins" for m in man.get("mods", [])):
+                    self.say("This Horde host has no zombie skins, death sounds or music to share: their hosting toolkit is out "
+                             "of date. They should press 'Refresh hosting toolkit' on their Host tab while someone with the "
+                             "full toolkit is hosting, then host again.")
                 music = man.get("music") if mode in ("horde", "dark") else None
                 if music:
                     try: self.music_path = self.get_music(addr, music)
