@@ -118,6 +118,50 @@ def hardware():
     except Exception:
         return 0, os.cpu_count() or 0
 
+GOG_ID = "1536913668"                    # Outlaws + Handful of Missions: Remaster on GOG
+
+def find_games():
+    """Folders on this PC that hold OutlawsAHOM.exe: the GOG install (registry, Galaxy's usual folders) and every
+    Steam library. Steam and GOG ship the same game files, so the companion treats both the same."""
+    found, cand = [], []
+    try:
+        import winreg
+        for root, key in ((winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\GOG.com\\Games\\" + GOG_ID),
+                          (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\GOG.com\\Games\\" + GOG_ID)):
+            try:
+                with winreg.OpenKey(root, key) as k: cand.append(winreg.QueryValueEx(k, "path")[0])
+            except OSError: pass
+        steam = None
+        for root, key, val in ((winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath"),
+                               (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath")):
+            try:
+                with winreg.OpenKey(root, key) as k: steam = winreg.QueryValueEx(k, val)[0]; break
+            except OSError: pass
+        if steam:
+            libs = [steam]
+            try:
+                import re
+                vdf = open(os.path.join(steam, "steamapps", "libraryfolders.vdf"), encoding="utf-8", errors="replace").read()
+                libs += [p.replace("\\\\", "\\") for p in re.findall(r'"path"\s+"([^"]+)"', vdf)]
+            except OSError: pass
+            cand += [os.path.join(l, "steamapps", "common", "Outlaws Remastered") for l in libs]
+    except ImportError:
+        pass
+    for pf in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")):
+        if pf: cand.append(os.path.join(pf, "GOG Galaxy", "Games", "Outlaws Plus Handful of Missions Remaster"))
+    for d in "CDEFGH":
+        cand.append(d + r":\GOG Games\Outlaws Plus Handful of Missions Remaster")
+    for c in cand:
+        c = os.path.normpath(c)
+        if os.path.exists(os.path.join(c, "OutlawsAHOM.exe")) and c.lower() not in (f.lower() for f in found): found.append(c)
+    return found
+
+def writable(folder):
+    try:
+        t = os.path.join(folder, ".companion_write_test"); open(t, "w").close(); os.remove(t); return True
+    except OSError:
+        return False
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -176,7 +220,7 @@ def restore_files():
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(APP); self.geometry("580x700"); self.configure(bg=PARCH); self.resizable(False, False)
+        self.title(APP); self.geometry("580x740"); self.configure(bg=PARCH); self.resizable(False, False)
         self.cfg = load(); self.busy = False; self.host_proc = None; self.session = False
         st = ttk.Style(self)
         try: st.theme_use("clam")
@@ -187,15 +231,16 @@ class App(tk.Tk):
         st.configure("Big.TButton", font=("Segoe UI", 13, "bold"), padding=10)
         tk.Label(self, text="OUTLAWS COMPANION", bg=PARCH, fg=RUST, font=("Georgia", 18, "bold")).pack(pady=(10, 0))
         self.folder_lbl = ttk.Label(self, foreground="#7a6a52"); self.folder_lbl.pack()
-        self.upd_btn = ttk.Button(self, text="Update Launcher", command=self.update_launcher)
-        self.upd_btn.place(relx=1.0, x=-12, y=12, anchor="ne")
-        ttk.Label(self, text="v%d" % VERSION, foreground="#7a6a52").place(x=12, y=14)
+        bar = ttk.Frame(self); bar.pack(side="bottom", fill="x", padx=12, pady=(0, 10))   # bottom row: version, update
+        ttk.Label(bar, text="v%d" % VERSION, foreground="#7a6a52").pack(side="left")
+        self.upd_btn = ttk.Button(bar, text="Update Launcher", command=self.update_launcher)
+        self.upd_btn.pack(side="right")
+        self.log_box = tk.Text(self, height=7, bg="#fbf3dc", fg=INK, relief="flat", state="disabled", font=("Consolas", 9))
+        self.log_box.pack(side="bottom", fill="x", padx=12, pady=(0, 6))
         nb = ttk.Notebook(self); nb.pack(fill="both", expand=True, padx=12, pady=8)
         self.join_tab = ttk.Frame(nb, padding=14); self.host_tab = ttk.Frame(nb, padding=14)
         nb.add(self.join_tab, text="  Join a game  "); nb.add(self.host_tab, text="  Host a game  ")
         self.build_join(); self.build_host()
-        self.log_box = tk.Text(self, height=7, bg="#fbf3dc", fg=INK, relief="flat", state="disabled", font=("Consolas", 9))
-        self.log_box.pack(fill="x", padx=12, pady=(0, 10))
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(200, self.startup)
 
@@ -211,7 +256,12 @@ class App(tk.Tk):
 
     def startup(self):
         if not os.path.exists(os.path.join(self.game_dir(), "OutlawsAHOM.exe")):
-            self.pick_folder(first=True)
+            games = find_games()
+            if len(games) == 1 or (games and messagebox.askyesno(APP, "Found Outlaws in more than one place:\n\n%s\n\nUse the first one?\n"
+                                                                  "(No: pick the folder yourself.)" % "\n".join(games))):
+                self.cfg["game"] = games[0]; save(self.cfg); self.say("Found your game: %s" % games[0])
+            else:
+                self.pick_folder(first=True)
         self.folder_lbl.configure(text=self.game_dir())
         if journal_read():
             if game_running():
@@ -230,7 +280,8 @@ class App(tk.Tk):
     def pick_folder(self, first=False):
         if first:
             messagebox.showinfo(APP, "Welcome! First, show me where Outlaws Remastered is installed:\n"
-                                "the folder that contains OutlawsAHOM.exe.\n(Steam: right-click the game > Manage > Browse local files.)")
+                                "the folder that contains OutlawsAHOM.exe.\n(Steam: right-click the game > Manage > Browse local files.\n"
+                                "GOG Galaxy: the game's settings button > Manage installation > Show folder.)")
         while True:
             d = filedialog.askdirectory(title="Pick your Outlaws Remastered folder (the one with OutlawsAHOM.exe)")
             if not d:
@@ -239,7 +290,8 @@ class App(tk.Tk):
             d = os.path.normpath(d)
             if os.path.exists(os.path.join(d, "OutlawsAHOM.exe")):
                 self.cfg["game"] = d; save(self.cfg); self.folder_lbl.configure(text=d); self.refresh_host(); return
-            messagebox.showerror(APP, "OutlawsAHOM.exe is not in that folder. Try the folder Steam's 'Browse local files' opens.")
+            messagebox.showerror(APP, "OutlawsAHOM.exe is not in that folder. Try the folder Steam's 'Browse local files' "
+                                 "or GOG Galaxy's 'Show folder' opens.")
 
     def on_close(self):
         if self.session:
@@ -251,6 +303,18 @@ class App(tk.Tk):
             if not messagebox.askyesno(APP, "You are hosting a game. Stop it and quit?"): return
             self.stop_host()
         self.destroy()
+
+    def ensure_writable(self, folder):
+        """Mods (and the hosting toolkit) go into the game folder. GOG often installs under Program Files, which Windows
+        protects: offer to let this Windows user change that one folder (one Windows prompt). Worker thread."""
+        if writable(folder): return True
+        if not self.ask("askyesno", APP, "Windows protects your game folder:\n%s\n\nThe game's mods have to be copied into it "
+                        "(and taken out again afterwards). Allow your Windows user to change this folder? Windows will ask you once." % folder):
+            return False
+        run_elevated("icacls", '"%s" /grant *S-1-5-32-545:(OI)(CI)M /T /Q' % folder)
+        if writable(folder): self.say("Your game folder can now take mods."); return True
+        self.say("Could not unlock the game folder. Run the companion as administrator, or move the game out of Program Files.")
+        return False
 
     def discover(self, wait=6.0):
         """Hosts on the ZeroTier network: [(ip, info)]. A UDP broadcast, sent out of the ZeroTier adapter only."""
@@ -509,6 +573,7 @@ class App(tk.Tk):
                         if sha256(p) != fl["sha256"]: raise RuntimeError("download of %s was damaged" % fl["dest"])
                         items.append((fl["dest"], p))
                 if items:
+                    if not self.ensure_writable(game): raise RuntimeError("the game folder is protected, so the mods can't be installed")
                     install_files(game, items); self.session = True
                     self.say("Installed %d mod file(s); they are removed when the game closes." % len(items))
             except Exception as e:
@@ -608,6 +673,7 @@ class App(tk.Tk):
             hosts = self.discover(4)
             addr = self.choose_host(hosts) if hosts else None
             if not addr: self.say("Nobody is hosting right now. Ask a friend to start a game, then press Set up hosting again."); return
+            if not self.ensure_writable(self.game_dir()): self.say("Setup cancelled: the game folder is protected."); return
             tk_dir = self.toolkit(); os.makedirs(tk_dir, exist_ok=True)
             self.say("Downloading the toolkit...")
             tmp = os.path.join(tempfile.mkdtemp(prefix="outlaws_comp_"), "t.zip")
