@@ -52,6 +52,15 @@ def game_running():
     except Exception:
         return False
 
+def clean_env():
+    """This app's environment without PyInstaller's own variables. A new OutlawsCompanion.exe started with them looks
+    for Python in THIS copy's temporary folder (deleted when it quits): "Failed to load Python DLL ... python312.dll"."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("_MEIPASS", "_PYI_", "PYINSTALLER_"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    for k in ("TCL_LIBRARY", "TK_LIBRARY"):
+        if getattr(sys, "frozen", False) and k in env and getattr(sys, "_MEIPASS", "\0") in env[k]: env.pop(k)
+    return env
+
 def run_elevated(exe, args):
     ps = ("Start-Process -FilePath '%s' -ArgumentList '%s' -Verb RunAs -Wait -WindowStyle Hidden" % (exe, args.replace("'", "''")))
     return subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, creationflags=NO_WINDOW).returncode == 0
@@ -380,9 +389,11 @@ class App(tk.Tk):
                 os.remove(new); self.say("The download was damaged; nothing changed. Try again."); return
             bat = os.path.join(tempfile.gettempdir(), "outlaws_companion_update.cmd")
             with open(bat, "w") as f:
-                f.write('@echo off\r\ntimeout /t 2 /nobreak >nul\r\nmove /y "%s" "%s" >nul\r\nstart "" "%s"\r\ndel "%%~f0"\r\n' % (new, exe, exe))
+                f.write('@echo off\r\nset PYINSTALLER_RESET_ENVIRONMENT=1\r\nset n=0\r\n:again\r\ntimeout /t 2 /nobreak >nul\r\n'
+                        'move /y "%s" "%s" >nul 2>&1 || (set /a n+=1 & if not %%n%%==15 goto again)\r\n'
+                        'start "" "%s"\r\ndel "%%~f0"\r\n' % (new, exe, exe))
             self.say("Updating; the app restarts by itself.")
-            subprocess.Popen(["cmd", "/c", bat], creationflags=NO_WINDOW)
+            subprocess.Popen(["cmd", "/c", bat], creationflags=NO_WINDOW, env=clean_env())
             self.after(500, self.destroy)
         except Exception as e:
             self.say("Update failed: %s" % e)
