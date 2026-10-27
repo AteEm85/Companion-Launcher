@@ -33,6 +33,9 @@ MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "f
 GAMES = [("Survival Horde", "horde"), ("Normal bot game", "dm")]
 LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare"]
 PARCH, INK, RUST = "#f1e4c3", "#3b2a1a", "#b5530f"
+WIN_W, WIN_H = 580, 730
+DARK, TXT, DIM, GOLD, WARN, EDGE = "#120b07", "#f6ead0", "#cdb994", "#f2b24a", "#ff9e6e", "#7a5a32"   # on the dark picture
+BTN, BTN_HOT, BTN_EDGE = "#8a3b12", "#a84a18", "#4a1e08"
 
 
 # ---- settings -------------------------------------------------------------------------------------------------------
@@ -246,40 +249,92 @@ def restore_files():
 
 
 # ---- the window -----------------------------------------------------------------------------------------------------
+class Txt:
+    """Text drawn straight on the background picture, with a dark shadow so it reads on any part of it."""
+    def __init__(self, cv, x, y, text="", tags=(), fill=None, font=None, width=0, anchor="w"):
+        self.cv = cv; font = font or ("Segoe UI", 10); fill = fill or TXT
+        self.sh = cv.create_text(x + 1, y + 1, text=text, fill="#000000", font=font, width=width, anchor=anchor, tags=tags)
+        self.id = cv.create_text(x, y, text=text, fill=fill, font=font, width=width, anchor=anchor, tags=tags)
+    def configure(self, text=None, fill=None):
+        if text is not None: self.cv.itemconfigure(self.sh, text=text); self.cv.itemconfigure(self.id, text=text)
+        if fill is not None: self.cv.itemconfigure(self.id, fill=fill)
+    def bind(self, fn):
+        for i in (self.sh, self.id): self.cv.tag_bind(i, "<Button-1>", lambda e: fn()); self.cv.tag_bind(i, "<Enter>", lambda e: self.cv.configure(cursor="hand2")); self.cv.tag_bind(i, "<Leave>", lambda e: self.cv.configure(cursor=""))
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(APP); self.geometry("580x740"); self.configure(bg=PARCH); self.resizable(False, False)
+        self.title(APP); self.geometry("%dx%d" % (WIN_W, WIN_H)); self.configure(bg=DARK); self.resizable(False, False)
         self.cfg = load(); self.busy = False; self.host_proc = None; self.session = False
         st = ttk.Style(self)
         try: st.theme_use("clam")
         except tk.TclError: pass
-        st.configure(".", background=PARCH, foreground=INK, font=("Segoe UI", 10))
-        st.configure("TNotebook", background=PARCH); st.configure("TFrame", background=PARCH)
-        st.configure("TLabel", background=PARCH); st.configure("TCheckbutton", background=PARCH)
+        st.configure(".", background=DARK, foreground=TXT, font=("Segoe UI", 10))
+        st.configure("TButton", background=BTN, foreground=TXT, bordercolor=BTN_EDGE, lightcolor=BTN, darkcolor=BTN_EDGE, padding=6)
+        st.map("TButton", background=[("disabled", "#4a3b2c"), ("active", BTN_HOT)], foreground=[("disabled", DIM)])
         st.configure("Big.TButton", font=("Segoe UI", 13, "bold"), padding=10)
         # Boxes you can change are white; boxes the chosen game ignores are grey, arrow included.
         GREY, GREY_TXT = "#d6cfbd", "#8f8571"
         for w in ("TCombobox", "TSpinbox"):
-            st.configure(w, fieldbackground="white", arrowcolor=INK)
+            st.configure(w, fieldbackground="white", foreground=INK, background="#efe6d2", arrowcolor=INK)
             st.map(w, fieldbackground=[("disabled", GREY), ("readonly", "white"), ("!disabled", "white")],
-                   background=[("disabled", GREY)], foreground=[("disabled", GREY_TXT)],
+                   background=[("disabled", GREY)], foreground=[("disabled", GREY_TXT), ("!disabled", INK)],
                    arrowcolor=[("disabled", GREY_TXT)], selectbackground=[("disabled", GREY), ("readonly", "white")],
                    selectforeground=[("disabled", GREY_TXT), ("readonly", INK)])
-        tk.Label(self, text="OUTLAWS COMPANION", bg=PARCH, fg=RUST, font=("Georgia", 18, "bold")).pack(pady=(10, 0))
-        self.folder_lbl = ttk.Label(self, foreground="#7a6a52"); self.folder_lbl.pack()
-        bar = ttk.Frame(self); bar.pack(side="bottom", fill="x", padx=12, pady=(0, 10))   # bottom row: version, update
-        ttk.Label(bar, text="v%d" % VERSION, foreground="#7a6a52").pack(side="left")
-        self.upd_btn = ttk.Button(bar, text="Update Launcher", command=self.update_launcher)
-        self.upd_btn.pack(side="right")
-        self.log_box = tk.Text(self, height=7, bg="#fbf3dc", fg=INK, relief="flat", state="disabled", font=("Consolas", 9))
-        self.log_box.pack(side="bottom", fill="x", padx=12, pady=(0, 6))
-        nb = ttk.Notebook(self); nb.pack(fill="both", expand=True, padx=12, pady=8)
-        self.join_tab = ttk.Frame(nb, padding=14); self.host_tab = ttk.Frame(nb, padding=14)
-        nb.add(self.join_tab, text="  Join a game  "); nb.add(self.host_tab, text="  Host a game  ")
-        self.build_join(); self.build_host()
+        self.option_add("*TCombobox*Listbox.background", "white"); self.option_add("*TCombobox*Listbox.foreground", INK)
+        cv = self.cv = tk.Canvas(self, width=WIN_W, height=WIN_H, highlightthickness=0, bd=0, bg=DARK)
+        cv.pack(fill="both", expand=True)
+        try:
+            import companion_bg
+            self.bg_img = tk.PhotoImage(data=companion_bg.PNG); cv.create_image(0, 0, image=self.bg_img, anchor="nw")
+        except Exception:
+            self.bg_img = None
+        cv.create_rectangle(12, 104, WIN_W - 12, 542, outline=EDGE)                      # the panel the tabs share
+        Txt(cv, WIN_W // 2, 30, "OUTLAWS COMPANION", fill=GOLD, font=("Georgia", 20, "bold"), anchor="center")
+        self.folder_lbl = Txt(cv, WIN_W // 2, 58, "", fill=DIM, font=("Segoe UI", 9), anchor="center")
+        self.tabs = {}
+        for i, (key, label) in enumerate((("join", "Join a game"), ("host", "Host a game"))):
+            t = Txt(cv, 28 + i * 150, 86, label, font=("Segoe UI", 12, "bold"))
+            t.bind(lambda k=key: self.show_tab(k)); self.tabs[key] = t
+        self.tab_line = cv.create_line(28, 99, 128, 99, fill=GOLD, width=3)
+        self.log_box = tk.Text(self, height=7, bg="#140d08", fg=TXT, insertbackground=TXT, relief="flat", bd=0, state="disabled",
+                               font=("Consolas", 9), highlightthickness=1, highlightbackground=EDGE, highlightcolor=EDGE)
+        cv.create_window(12, 552, window=self.log_box, anchor="nw", width=WIN_W - 24, height=118)
+        Txt(cv, 16, WIN_H - 28, "v%d" % VERSION, fill=DIM)
+        self.upd_btn = ttk.Button(self, text="Update Launcher", command=self.update_launcher)
+        cv.create_window(WIN_W - 12, WIN_H - 28, window=self.upd_btn, anchor="e")
+        self.tab = "join"; self.have_toolkit = False
+        self.build_join(); self.build_host(); self.show_tab("join")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(200, self.startup)
+
+    def show_tab(self, key):
+        self.tab = key
+        for k, t in self.tabs.items(): t.configure(fill=GOLD if k == key else DIM)
+        x = 28 + (0 if key == "join" else 150)
+        self.cv.coords(self.tab_line, x, 99, x + (100 if key == "join" else 104), 99)
+        self.visibility()
+
+    def visibility(self):
+        """Show the items of the open tab only (and on the Host tab, the setup or the form; Horde mode only for Horde)."""
+        cv = self.cv
+        parked = self.__dict__.setdefault("_parked", {})
+        def show(tag, on):
+            cv.itemconfigure(tag, state="normal" if on else "hidden")
+            for i in cv.find_withtag(tag):                     # embedded widgets: also moved off the window when hidden
+                if cv.type(i) != "window": continue
+                if not on and i not in parked: parked[i] = cv.coords(i); cv.coords(i, -2000, -2000)
+                elif on and i in parked: cv.coords(i, *parked.pop(i))
+        horde = dict(GAMES).get(self.h_game.get()) == "horde"
+        show("join", self.tab == "join")
+        show("host_setup", self.tab == "host" and not self.have_toolkit)
+        show("host_form", self.tab == "host" and self.have_toolkit)
+        show("hmode", self.tab == "host" and self.have_toolkit and horde)
+
+    def put(self, widget, x, y, tags, **kw):
+        """A widget on the background, at x, y (its left middle)."""
+        return self.cv.create_window(x, y, window=widget, anchor=kw.pop("anchor", "w"), tags=tags, **kw)
 
     # -- helpers
     def say(self, msg):
@@ -386,7 +441,7 @@ class App(tk.Tk):
         if len(hosts) == 1: return hosts[0][0]
         ev, ans = threading.Event(), []
         def ask():
-            win = tk.Toplevel(self); win.title("Which game?"); win.configure(bg=PARCH); win.grab_set()
+            win = tk.Toplevel(self); win.title("Which game?"); win.configure(bg=DARK); win.grab_set()
             ttk.Label(win, text="Several games found. Pick one:").pack(padx=14, pady=8)
             for ip, info in hosts:
                 ttk.Button(win, text="%s: %s on %s" % (info.get("name", ip), info.get("mode") or "game", info.get("map") or "?"),
@@ -513,6 +568,10 @@ class App(tk.Tk):
         except SyntaxError as e:
             os.remove(new); self.say("The downloaded companion.py is broken (%s); nothing changed." % e); return
         shutil.copyfile(me, me + ".bak"); os.replace(new, me)
+        try:                                                   # the background picture lives beside it
+            with self.gh("companion_bg.py", 60, root=True) as r: data = r.read()
+            with open(os.path.join(os.path.dirname(me), "companion_bg.py"), "wb") as f: f.write(data)
+        except Exception: pass
         build = os.path.join(os.path.dirname(me), "build_companion.cmd")
         if os.path.exists(build):
             self.say("Updated companion.py; rebuilding OutlawsCompanion.exe in a new window...")
@@ -524,20 +583,19 @@ class App(tk.Tk):
 
     # -- JOIN
     def build_join(self):
-        f = self.join_tab
-        row = ttk.Frame(f); row.pack(fill="x", pady=4)
-        ttk.Label(row, text="Character").grid(row=0, column=0, sticky="w")
-        self.char = ttk.Combobox(row, values=["(pick in game)"] + CHARS, state="readonly", width=18)
-        self.char.set(self.cfg.get("char", "(pick in game)")); self.char.grid(row=0, column=1, padx=8)
-        ttk.Label(row, text="Screen").grid(row=1, column=0, sticky="w", pady=6)
-        self.screen = ttk.Combobox(row, values=list(SCREENS), state="readonly", width=18)
-        self.screen.set(self.cfg.get("screen", "Borderless window")); self.screen.grid(row=1, column=1, padx=8)
-        self.join_btn = ttk.Button(f, text="JOIN GAME", style="Big.TButton", command=self.join)
-        self.join_btn.pack(pady=18, fill="x")
-        ttk.Label(f, foreground="#7a6a52", wraplength=480, text=(
+        cv, T = self.cv, ("join",)
+        Txt(cv, 36, 140, "Character", T)
+        self.char = ttk.Combobox(self, values=["(pick in game)"] + CHARS, state="readonly", width=22)
+        self.char.set(self.cfg.get("char", "(pick in game)")); self.put(self.char, 210, 140, T)
+        Txt(cv, 36, 178, "Screen", T)
+        self.screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=22)
+        self.screen.set(self.cfg.get("screen", "Borderless window")); self.put(self.screen, 210, 178, T)
+        self.join_btn = ttk.Button(self, text="JOIN GAME", style="Big.TButton", command=self.join)
+        self.put(self.join_btn, 36, 238, T, width=WIN_W - 72)
+        Txt(cv, 36, 280, (
             "Any mods the game needs are downloaded and installed for you, and removed again when you close the game. "
             "When your game opens, choose LAN > Join Game and pick the host's game from the list. "
-            "In a Survival Horde game, pick the Survivors team in the lobby.")).pack(anchor="w")
+            "In a Survival Horde game, pick the Survivors team in the lobby."), T, fill=DIM, width=WIN_W - 72, anchor="nw")
 
     def join(self):
         if self.busy: return
@@ -646,50 +704,61 @@ class App(tk.Tk):
 
     # -- HOST
     def build_host(self):
-        self.setup_frame = ttk.Frame(self.host_tab); self.form = ttk.Frame(self.host_tab)
-        ttk.Label(self.setup_frame, wraplength=480, text=(
+        cv = self.cv; S, F = ("host_setup",), ("host_form",)
+        Txt(cv, 36, 128, (
             "Hosting needs the bot toolkit (a one-time download of about 1 MB, plus Python 3 on this PC). "
-            "A friend who is hosting right now must be online: I'll fetch it from them.")).pack(anchor="w")
-        self.setup_btn = ttk.Button(self.setup_frame, text="Set up hosting", style="Big.TButton", command=self.setup_toolkit)
-        self.setup_btn.pack(pady=14, fill="x")
-        f = self.form; g = dict(sticky="w", pady=4)
-        self.h_game = ttk.Combobox(f, values=[a for a, _ in GAMES], state="readonly", width=22); self.h_game.set(self.cfg.get("h_game", "Survival Horde"))
-        mapcell = ttk.Frame(f)                    # Standard / Custom ticks, then the map list for that choice
+            "A friend who is hosting right now must be online: I'll fetch it from them."), S, width=WIN_W - 72, anchor="nw")
+        self.setup_btn = ttk.Button(self, text="Set up hosting", style="Big.TButton", command=self.setup_toolkit)
+        self.put(self.setup_btn, 36, 210, S, width=WIN_W - 72)
+        X = 250                                                   # where the boxes start
+        self.h_game = ttk.Combobox(self, values=[a for a, _ in GAMES], state="readonly", width=24); self.h_game.set(self.cfg.get("h_game", "Survival Horde"))
+        Txt(cv, 36, 130, "Game", F); self.put(self.h_game, X, 130, F)
+        Txt(cv, 36, 164, "Map", F)                                # Standard / Custom ticks, then the map list for that choice
         self.h_mapkind = tk.StringVar(value=self.cfg.get("h_mapkind", "Standard"))
-        ticks = ttk.Frame(mapcell); ticks.pack(anchor="w")
-        for t in ("Standard", "Custom"):
-            ttk.Radiobutton(ticks, text=t, value=t, variable=self.h_mapkind, command=self.map_choices).pack(side="left", padx=(0, 12))
-        self.h_map = ttk.Combobox(mapcell, state="readonly", width=30); self.h_map.pack(anchor="w", pady=(2, 0))
+        self.kind_ticks = {}
+        for i, t in enumerate(("Standard", "Custom")):
+            tick = Txt(cv, X + i * 110, 164, "", F, font=("Segoe UI Symbol", 10))
+            tick.bind(lambda t=t: (self.h_mapkind.set(t), self.map_choices())); self.kind_ticks[t] = tick
+        self.h_map = ttk.Combobox(self, state="readonly", width=32); self.put(self.h_map, X, 192, F)
         self.map_keys = {}
         self.h_bots = tk.IntVar(value=self.cfg.get("h_bots", 3)); self.h_users = tk.IntVar(value=self.cfg.get("h_users", 2))
-        self.h_level = ttk.Combobox(f, values=LEVELS, state="readonly", width=22); self.h_level.set(self.cfg.get("h_level", "Normal"))
+        self.h_bots_spin = ttk.Spinbox(self, from_=1, to=7, width=6, textvariable=self.h_bots)
+        Txt(cv, 36, 228, "# of Bots (For Normal Games)", F); self.put(self.h_bots_spin, X, 228, F)
+        Txt(cv, 36, 262, "Players, you included", F); self.put(ttk.Spinbox(self, from_=1, to=10, width=6, textvariable=self.h_users), X, 262, F)
+        self.h_level = ttk.Combobox(self, values=LEVELS, state="readonly", width=24); self.h_level.set(self.cfg.get("h_level", "Normal"))
+        Txt(cv, 36, 296, "Bot level", F); self.put(self.h_level, X, 296, F)
+        H = ("host_form", "hmode")
+        self.h_hmode = ttk.Combobox(self, values=["Normal", "Challenge", "Dark Mode"], state="readonly", width=24)
+        self.h_hmode.set(self.cfg.get("h_hmode", "Normal"))
+        Txt(cv, 36, 330, "Horde mode", H); self.put(self.h_hmode, X, 330, H)
         self.h_play = tk.BooleanVar(value=True)
-        self.h_bots_spin = ttk.Spinbox(f, from_=1, to=7, width=6, textvariable=self.h_bots)
-        for r, (t, w) in enumerate([("Game", self.h_game), ("Map", mapcell), ("# of Bots (For Normal Games)", self.h_bots_spin),
-                                    ("Players, you included", ttk.Spinbox(f, from_=1, to=10, width=6, textvariable=self.h_users)), ("Bot level", self.h_level)]):
-            ttk.Label(f, text=t).grid(row=r, column=0, **g); w.grid(row=r, column=1, padx=8, **g)
-        self.h_hmode_lbl = ttk.Label(f, text="Horde mode"); self.h_hmode_lbl.grid(row=5, column=0, **g)
-        self.h_hmode = ttk.Combobox(f, values=["Normal", "Challenge", "Dark Mode"], state="readonly", width=22)
-        self.h_hmode.set(self.cfg.get("h_hmode", "Normal")); self.h_hmode.grid(row=5, column=1, padx=8, **g)
-        self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
-        self.game_choice()
-        ttk.Checkbutton(f, text="I play too", variable=self.h_play).grid(row=6, column=0, columnspan=2, **g)
+        self.play_tick = Txt(cv, 36, 364, "", F, font=("Segoe UI Symbol", 10))
+        self.play_tick.bind(lambda: (self.h_play.set(not self.h_play.get()), self.draw_ticks()))
         ram, cpu = hardware(); low = (ram and ram < 16) or cpu < 8
         self.low_pc = bool(low)
-        ttk.Label(f, wraplength=470, foreground="#9c2f0f" if low else "#7a6a52", text=(
+        Txt(cv, 36, 384, (
             "Every bot is a full copy of the game, so each one uses a lot of RAM and CPU. Hosting too many bots can slow or "
             "crash your game. Survival Horde grows to 10 bots. This PC: %s, %d CPU threads. %s" % (
                 ("%d GB RAM" % ram) if ram else "RAM unknown", cpu,
                 "That is on the low side: keep normal games to 1-2 bots, and join Horde games instead of hosting them." if low
-                else "If the game stutters, lower the bots."))).grid(row=7, column=0, columnspan=2, sticky="w", pady=4)
-        self.host_btn = ttk.Button(f, text="START HOSTING", style="Big.TButton", command=self.host_toggle)
-        self.host_btn.grid(row=8, column=0, columnspan=2, pady=8, sticky="ew")
-        self.addr_lbl = ttk.Label(f, text="", font=("Segoe UI", 11, "bold"), foreground=RUST); self.addr_lbl.grid(row=9, column=0, columnspan=2, sticky="w")
+                else "If the game stutters, lower the bots.")), F, fill=WARN if low else DIM, font=("Segoe UI", 9),
+            width=WIN_W - 72, anchor="nw")
+        self.host_btn = ttk.Button(self, text="START HOSTING", style="Big.TButton", command=self.host_toggle)
+        self.put(self.host_btn, 36, 486, F, width=WIN_W - 72)
+        self.addr_lbl = Txt(cv, 36, 524, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
+        self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
+        self.game_choice()
+
+    def draw_ticks(self):
+        for t, tick in self.kind_ticks.items():
+            tick.configure(text=("◉ " if self.h_mapkind.get() == t else "○ ") + t)
+        self.play_tick.configure(text=("☑ " if self.h_play.get() else "☐ ") + "I play too")
 
     def map_choices(self):
         """Fill the Map list: the game's own maps, or the custom maps in your game folder. Only maps that have the
         chosen game's mode are offered (Survival Horde needs team deathmatch; Sanctuary is made to work for it)."""
         horde = dict(GAMES).get(self.h_game.get()) == "horde"
+        self.draw_ticks()
         if self.h_mapkind.get() == "Custom":
             pairs = [(l, k) for l, k, m in custom_maps(self.game_dir(), self.toolkit()) if ("M" if horde else "D") in m]
         else:
@@ -707,13 +776,11 @@ class App(tk.Tk):
         self.map_choices()
         self.h_bots_spin.state(["disabled"] if horde else ["!disabled"])
         self.h_level.configure(state="disabled" if horde else "readonly")     # Horde raises the bots' level by itself
-        for w in (self.h_hmode_lbl, self.h_hmode):                            # only a Horde game has a Horde mode
-            w.grid() if horde else w.grid_remove()
+        if hasattr(self, "tab"): self.visibility()                           # only a Horde game has a Horde mode
 
     def refresh_host(self):
-        have = os.path.exists(os.path.join(self.toolkit(), "botctl.py"))
-        self.form.pack_forget(); self.setup_frame.pack_forget()
-        (self.form if have else self.setup_frame).pack(fill="both")
+        self.have_toolkit = os.path.exists(os.path.join(self.toolkit(), "botctl.py"))
+        self.visibility()
 
     def setup_toolkit(self):
         if self.busy: return

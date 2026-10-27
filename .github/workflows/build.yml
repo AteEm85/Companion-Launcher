@@ -4,7 +4,7 @@ name: Build Outlaws Companion
 on:
   push:
     branches: [main]
-    paths: ["companion.py", "launcher.ico", ".github/workflows/build.yml"]
+    paths: ["companion.py", "companion_bg.py", "launcher.ico", ".github/workflows/build.yml"]
   workflow_dispatch:
 permissions:
   contents: write
