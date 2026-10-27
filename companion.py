@@ -455,7 +455,7 @@ class App(tk.Tk):
             with open(bat, "w") as f:
                 f.write('@echo off\r\nset PYINSTALLER_RESET_ENVIRONMENT=1\r\nset n=0\r\n:again\r\ntimeout /t 2 /nobreak >nul\r\n'
                         'move /y "%s" "%s" >nul 2>&1 || (set /a n+=1 & if not %%n%%==15 goto again)\r\n'
-                        'start "" "%s"\r\ndel "%%~f0"\r\n' % (new, exe, exe))
+                        'explorer.exe "%s"\r\ndel "%%~f0"\r\n' % (new, exe, exe))      # Explorer starts it: nothing of this copy is inherited
             self.say("Updating; the app restarts by itself.")
             subprocess.Popen(["cmd", "/c", bat], creationflags=NO_WINDOW, env=clean_env())
             self.after(500, self.destroy)
