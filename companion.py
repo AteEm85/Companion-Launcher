@@ -24,9 +24,20 @@ ZT_CLI = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x8
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 ALLOWED_EXT = (".spx", ".lab", ".rcm", ".obt", ".obb")
 CHARS = ["Sanchez", "James Anderson", "Two Feathers", "Dr Death", "Bob", "Mary"]
-SCREENS = {"Window": ["-window", "-width", "1280", "-height", "720", "-setvar", "v_windowmode", "0"],
-           "Borderless window": ["-setvar", "v_windowmode", "1"],
-           "Full screen": ["-fullscreen", "-setvar", "v_windowmode", "2"]}
+SCREENS = {"Window": (["-window", "-width", "1280", "-height", "720"], "0"),        # (flags, v_windowmode)
+           "Borderless window": ([], "1"),
+           "Full screen": (["-fullscreen"], "2")}
+
+def game_cmd(game, screen, char=None, join=None):
+    """The command line for your own game. The game reads ONE -setvar block (name value name value ...): a second
+    -setvar is ignored, which is how the character got lost before. So every setting goes in a single block, last."""
+    flags, winmode = SCREENS.get(screen, ([], None))
+    cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies"] + flags
+    if join: cmd += ["-join", join]
+    setvars = []
+    if winmode is not None: setvars += ["v_windowmode", winmode]
+    if char in CHARS: setvars += ["mp_defaultChar", str(CHARS.index(char) + 1)]
+    return cmd + (["-setvar"] + setvars if setvars else [])
 MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "fort"), ("The Granary", "granary"),
         ("Hargrove's Pattern Repair", "hargrove"), ("Bunkers", "lilbatl"), ("Simms At Night", "mltsimms"),
         ("Orleans", "orleans"), ("Thud Tower", "thudtowr"), ("Sanctuary", "town_2p"), ("Wilderness", "wilderns")]
@@ -336,6 +347,7 @@ class App(tk.Tk):
         show("host_setup", self.tab == "host" and not self.have_toolkit)
         show("host_form", self.tab == "host" and self.have_toolkit)
         show("hmode", self.tab == "host" and self.have_toolkit and horde)
+        show("normal", self.tab == "host" and self.have_toolkit and not horde)
 
     def put(self, widget, x, y, tags, **kw):
         """A widget on the background, at x, y (its left middle)."""
@@ -650,7 +662,7 @@ class App(tk.Tk):
             if addr is False: self.say("Joining cancelled."); return
             if not addr:
                 self.say("No hosted game found, so no mods were installed. Opening the game anyway: use LAN > Join Game.")
-            game = self.game_dir(); items = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""
+            game = self.game_dir(); items = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""; self.music_path = None
             try:
                 if not addr: raise OSError("no host")
                 man = None
@@ -662,6 +674,10 @@ class App(tk.Tk):
                 self.cfg["last_host"] = addr; save(self.cfg)
                 self.say("Connected to %s: %s on %s" % (man.get("name", "host"), man.get("mode") or "game", man.get("map") or "?"))
                 mode = man.get("mode") or ""
+                music = man.get("music") if mode in ("horde", "dark") else None
+                if music:
+                    try: self.music_path = self.get_music(addr, music)
+                    except Exception as e: self.say("Couldn't get the Horde music (%s)." % e)
                 for mod in man.get("mods", []):
                     todo = []
                     for fl in mod.get("files", []):
@@ -687,15 +703,14 @@ class App(tk.Tk):
                     self.say("Stopped: %s" % e); return
                 if addr: self.say("Could not ask the host for mods (%s); joining without." % e)
                 items = []
-            cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies"] + SCREENS.get(self.screen.get(), [])
-            if addr: cmd += ["-join", addr]                     # straight into the host's game
-            if self.char.get() in CHARS: cmd += ["-setvar", "mp_defaultChar", str(CHARS.index(self.char.get()) + 1)]
+            cmd = game_cmd(game, self.screen.get(), self.char.get(), addr)      # addr: straight into the host's game
             try: me = subprocess.Popen(cmd, cwd=game)
             except OSError as e:
                 self.say("Could not start the game: %s" % e); restore_files(); self.session = False; return
             if addr and mode in ("horde", "dark"):
                 self.say("Game starting: it joins the host's Survival Horde game and the Survivors team by itself.")
                 threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
+                if self.music_path: threading.Thread(target=self.play_music, args=(self.music_path,), daemon=True).start()
             elif addr:
                 self.say("Game starting: it joins the host's game by itself.")
             else:
@@ -705,6 +720,30 @@ class App(tk.Tk):
         finally:
             self.busy = False
             self.after(0, lambda: self.join_btn.configure(text="JOIN GAME", state="normal"))
+
+    def get_music(self, addr, entry):
+        """The host's Horde music, kept in this app's folder (downloaded again only when the host's file changes)."""
+        d = os.path.join(DATA, "music"); os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "horde_ambient.wav")
+        if not (os.path.exists(p) and sha256(p) == entry["sha256"]):
+            self.say("Downloading the Horde music...")
+            with self.fetch(addr, entry["url"], 120) as r, open(p + ".part", "wb") as f: shutil.copyfileobj(r, f)
+            if sha256(p + ".part") != entry["sha256"]: os.remove(p + ".part"); raise RuntimeError("download damaged")
+            os.replace(p + ".part", p)
+        return p
+
+    def play_music(self, path):
+        """The Horde's background loop, on this PC, for as long as your game is open (the host hears its own copy)."""
+        try: import winsound
+        except ImportError: return
+        t0 = time.time()
+        while not game_running() and time.time() - t0 < 180: time.sleep(2)
+        try:
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+            while game_running(): time.sleep(3)
+        finally:
+            try: winsound.PlaySound(None, 0)
+            except Exception: pass
 
     def agent_source(self):
         """input_agent.js (the bot toolkit's game agent; knows the Steam and the GOG game): built into the exe, or
@@ -807,6 +846,12 @@ class App(tk.Tk):
         self.h_char = ttk.Combobox(self, values=CHARS, state="readonly", width=24)            # yours, in a Horde game
         self.h_char.set(self.cfg.get("h_char") if self.cfg.get("h_char") in CHARS else CHARS[0])
         Txt(cv, 36, 364, "Your character", H); self.put(self.h_char, X, 364, H)
+        N = ("host_form", "normal")                               # a normal game's limits, in the same place (blank: none set)
+        self.h_kills = tk.StringVar(value=self.cfg.get("h_kills", "")); self.h_time = tk.StringVar(value=self.cfg.get("h_time", ""))
+        Txt(cv, 36, 330, "Kill limit (blank = none set)", N)
+        self.put(ttk.Spinbox(self, from_=1, to=200, width=6, textvariable=self.h_kills), X, 330, N)
+        Txt(cv, 36, 364, "Time limit in minutes", N)
+        self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X, 364, N)
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
         self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Borderless window")
         Txt(cv, 36, 398, "Your screen", F); self.put(self.h_screen, X, 398, F)
@@ -826,6 +871,8 @@ class App(tk.Tk):
         self.put(self.host_btn, 36, 552, F, width=WIN_W - 72 - CLOSE_W - 10)
         self.close_btns.append(ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all))
         self.put(self.close_btns[-1], WIN_W - 36, 552, F, anchor="e", width=CLOSE_W, height=48)
+        refresh = Txt(cv, 70, WIN_H - 28, "Refresh hosting toolkit", F, fill=DIM, font=("Segoe UI", 9, "underline"))
+        refresh.bind(self.setup_toolkit)
         self.addr_lbl = Txt(cv, 36, 588, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
         self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
         self.game_choice()
@@ -886,10 +933,12 @@ class App(tk.Tk):
             tk_dir = self.toolkit(); os.makedirs(tk_dir, exist_ok=True)
             self.say("Downloading the toolkit...")
             tmp = os.path.join(tempfile.mkdtemp(prefix="outlaws_comp_"), "t.zip")
-            with self.fetch(addr, "/toolkit.zip", 60) as r, open(tmp, "wb") as out: shutil.copyfileobj(r, out)
+            with self.fetch(addr, "/toolkit.zip", 180) as r, open(tmp, "wb") as out: shutil.copyfileobj(r, out)
             with zipfile.ZipFile(tmp) as z:
-                for n in z.namelist():
-                    if n != os.path.basename(n) or n.startswith(("/", "\\")): continue
+                for n in z.namelist():                           # scripts, plus zombie\ and sounds\ (the Horde's assets)
+                    parts = n.replace("\\", "/").split("/")
+                    if len(parts) > 2 or ".." in parts or not parts[-1] or (len(parts) == 2 and parts[0] not in ("zombie", "sounds")):
+                        continue
                     z.extract(n, tk_dir)
             self.say("Toolkit installed. Setting up Python (a few minutes the first time)...")
             py = self.python_cmd()
@@ -917,6 +966,13 @@ class App(tk.Tk):
         map_key = self.map_keys.get(self.h_map.get())
         if not map_key:
             messagebox.showinfo(APP, "Pick a map first. (Custom maps are the ones in your Outlaws folder: a .lab and an .rcm file each.)"); return
+        lim = {}
+        if kind != "horde":
+            for k, v, name in (("fraglimit", self.h_kills.get().strip(), "Kill limit"), ("timelimit", self.h_time.get().strip(), "Time limit")):
+                if not v: continue
+                if not v.isdigit() or int(v) < 1:
+                    messagebox.showinfo(APP, "%s must be a whole number (or blank)." % name); return
+                lim[k] = v
         if kind == "horde":
             if not messagebox.askyesno(APP, "Survival Horde adds bots until there are 10, and every bot is a full copy of the game.\n\n"
                                        "On a PC that isn't powerful, hosting can slow down or crash your game (and everyone else's). "
@@ -926,9 +982,9 @@ class App(tk.Tk):
                                        "With %d bots on a PC that isn't powerful, the game can slow down or crash. Keep the number low if unsure.\n\nHost anyway?" % self.h_bots.get()): return
         cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": kind, "map": map_key,
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
-               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player"}
+               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", **lim}
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get()); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip()); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
@@ -950,9 +1006,8 @@ class App(tk.Tk):
                     joined = True; self.say("The game is up: friends can join now.")
                     if play:
                         game = self.game_dir()
-                        cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies", "-join", "127.0.0.1"] + SCREENS.get(self.h_screen.get(), [])
                         char = self.h_char.get() if kind == "horde" else self.char.get()
-                        if char in CHARS: cmd += ["-setvar", "mp_defaultChar", str(CHARS.index(char) + 1)]
+                        cmd = game_cmd(game, self.h_screen.get(), char, "127.0.0.1")
                         try:
                             me = subprocess.Popen(cmd, cwd=game)
                             if kind == "horde":
