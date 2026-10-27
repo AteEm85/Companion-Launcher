@@ -534,12 +534,15 @@ class App(tk.Tk):
         self.h_bots = tk.IntVar(value=self.cfg.get("h_bots", 3)); self.h_users = tk.IntVar(value=self.cfg.get("h_users", 2))
         self.h_level = ttk.Combobox(f, values=LEVELS, state="readonly", width=22); self.h_level.set(self.cfg.get("h_level", "Normal"))
         self.h_play = tk.BooleanVar(value=True)
-        for r, (t, w) in enumerate([("Game", self.h_game), ("Map", self.h_map), ("Bots (normal game)", ttk.Spinbox(f, from_=1, to=7, width=6, textvariable=self.h_bots)),
+        self.h_bots_spin = ttk.Spinbox(f, from_=1, to=7, width=6, textvariable=self.h_bots)
+        for r, (t, w) in enumerate([("Game", self.h_game), ("Map", self.h_map), ("Bots (normal game)", self.h_bots_spin),
                                     ("Players, you included", ttk.Spinbox(f, from_=1, to=10, width=6, textvariable=self.h_users)), ("Bot level", self.h_level)]):
             ttk.Label(f, text=t).grid(row=r, column=0, **g); w.grid(row=r, column=1, padx=8, **g)
         ttk.Label(f, text="Horde mode").grid(row=5, column=0, **g)
         self.h_hmode = ttk.Combobox(f, values=["Normal", "Challenge", "Dark Mode"], state="readonly", width=22)
         self.h_hmode.set(self.cfg.get("h_hmode", "Normal")); self.h_hmode.grid(row=5, column=1, padx=8, **g)
+        self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
+        self.game_choice()
         ttk.Checkbutton(f, text="I play too", variable=self.h_play).grid(row=6, column=0, columnspan=2, **g)
         ram, cpu = hardware(); low = (ram and ram < 16) or cpu < 8
         self.low_pc = bool(low)
@@ -552,6 +555,11 @@ class App(tk.Tk):
         self.host_btn = ttk.Button(f, text="START HOSTING", style="Big.TButton", command=self.host_toggle)
         self.host_btn.grid(row=8, column=0, columnspan=2, pady=8, sticky="ew")
         self.addr_lbl = ttk.Label(f, text="", font=("Segoe UI", 11, "bold"), foreground=RUST); self.addr_lbl.grid(row=9, column=0, columnspan=2, sticky="w")
+
+    def game_choice(self):
+        """Survival Horde adds its own bots (up to 10): the bot count is greyed out for it."""
+        horde = dict(GAMES).get(self.h_game.get()) == "horde"
+        self.h_bots_spin.state(["disabled"] if horde else ["!disabled"])
 
     def refresh_host(self):
         have = os.path.exists(os.path.join(self.toolkit(), "botctl.py"))
