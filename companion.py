@@ -629,7 +629,7 @@ class App(tk.Tk):
         self.h_level = ttk.Combobox(f, values=LEVELS, state="readonly", width=22); self.h_level.set(self.cfg.get("h_level", "Normal"))
         self.h_play = tk.BooleanVar(value=True)
         self.h_bots_spin = ttk.Spinbox(f, from_=1, to=7, width=6, textvariable=self.h_bots)
-        for r, (t, w) in enumerate([("Game", self.h_game), ("Map", self.h_map), ("Bots (normal game)", self.h_bots_spin),
+        for r, (t, w) in enumerate([("Game", self.h_game), ("Map", self.h_map), ("# of Bots (For Normal Games)", self.h_bots_spin),
                                     ("Players, you included", ttk.Spinbox(f, from_=1, to=10, width=6, textvariable=self.h_users)), ("Bot level", self.h_level)]):
             ttk.Label(f, text=t).grid(row=r, column=0, **g); w.grid(row=r, column=1, padx=8, **g)
         ttk.Label(f, text="Horde mode").grid(row=5, column=0, **g)
