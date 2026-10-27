@@ -14,3 +14,8 @@ Everyone's **Update Launcher** button then downloads the new build, checks its S
 
 ## Building by hand
 `build_companion.cmd` (Windows, Python 3 with tkinter).
+
+## Hosting toolkit
+`toolkit/toolkit.zip` is the bot toolkit a friend's companion installs when they press **Set up hosting** or
+**Refresh hosting toolkit** (the bots, map data, zombie skins, zombie death sounds and the Horde's sounds and music).
+`toolkit/version.txt` is `<timestamp> <sha256> <size>`; companions with an older timestamp are told to refresh.

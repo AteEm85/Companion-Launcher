@@ -543,6 +543,14 @@ class App(tk.Tk):
     def check_update_quiet(self):
         """At start: light up the button when GitHub has a newer build (nothing is downloaded)."""
         try:
+            have = self.cfg.get("toolkit_stamp")
+            if have and os.path.exists(os.path.join(self.toolkit(), "botctl.py")):
+                new = self.gh("toolkit/version.txt", 15, root=True).read().decode().split()[0]
+                if new > have:
+                    self.say("A newer hosting toolkit is on GitHub: press 'Refresh hosting toolkit' on the Host tab to get it.")
+        except Exception:
+            pass
+        try:
             num = int(self.gh("version.txt", 15).read().decode().split()[0])
             if num > VERSION:
                 self.after(0, lambda: self.upd_btn.configure(text="Update available (%s)" % vtext(num)))
@@ -689,8 +697,7 @@ class App(tk.Tk):
                                                  "; music" if man.get("music") else ""))
                 if mode in ("horde", "dark") and not any(m.get("id") == "zombie_skins" for m in man.get("mods", [])):
                     self.say("This Horde host has no zombie skins, death sounds or music to share: their hosting toolkit is out "
-                             "of date. They should press 'Refresh hosting toolkit' on their Host tab while someone with the "
-                             "full toolkit is hosting, then host again.")
+                             "of date. They should press 'Refresh hosting toolkit' on their Host tab, then host again.")
                 music = man.get("music") if mode in ("horde", "dark") else None
                 if music:
                     try: self.music_path = self.get_music(addr, music)
@@ -832,8 +839,8 @@ class App(tk.Tk):
     def build_host(self):
         cv = self.cv; S, F = ("host_setup",), ("host_form",)
         Txt(cv, 36, 128, (
-            "Hosting needs the bot toolkit (a one-time download of about 1 MB, plus Python 3 on this PC). "
-            "A friend who is hosting right now must be online: I'll fetch it from them."), S, width=WIN_W - 72, anchor="nw")
+            "Hosting needs the bot toolkit: a one-time download of about 35 MB from GitHub (the bots, zombie skins, "
+            "death sounds and music), plus Python 3 on this PC."), S, width=WIN_W - 72, anchor="nw")
         self.setup_btn = ttk.Button(self, text="Set up hosting", style="Big.TButton", command=self.setup_toolkit)
         self.put(self.setup_btn, 36, 210, S, width=WIN_W - 72 - CLOSE_W - 10)
         self.close_btns.append(ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all))
@@ -941,22 +948,34 @@ class App(tk.Tk):
 
     def setup_work(self):
         try:
-            if not self.ensure_zerotier(): self.say("Setup cancelled: ZeroTier is needed first."); return
-            self.say("Looking for a friend who is hosting (the toolkit is fetched from them)...")
-            hosts = self.discover(4)
-            addr = self.choose_host(hosts) if hosts else None
-            if not addr: self.say("Nobody is hosting right now. Ask a friend to start a game, then press Set up hosting again."); return
+            tk_dir = self.toolkit()
+            if os.path.exists(os.path.join(tk_dir, "BotLauncher.exe")) or os.path.isdir(os.path.join(tk_dir, "Companion-Launcher")):
+                self.say("This PC has the original bot toolkit (the one the hosting toolkit is made from): it is not "
+                         "replaced. Hosting is ready."); return
             if not self.ensure_writable(self.game_dir()): self.say("Setup cancelled: the game folder is protected."); return
-            tk_dir = self.toolkit(); os.makedirs(tk_dir, exist_ok=True)
-            self.say("Downloading the toolkit...")
+            os.makedirs(tk_dir, exist_ok=True)
             tmp = os.path.join(tempfile.mkdtemp(prefix="outlaws_comp_"), "t.zip")
-            with self.fetch(addr, "/toolkit.zip", 180) as r, open(tmp, "wb") as out: shutil.copyfileobj(r, out)
+            stamp = None
+            try:                                       # the published toolkit on GitHub: works whether or not anyone is hosting
+                stamp, sha, size = self.gh("toolkit/version.txt", 30, root=True).read().decode().split()[:3]
+                self.say("Downloading the hosting toolkit from GitHub (%d MB)..." % (int(size) // 2**20))
+                with self.gh("toolkit/toolkit.zip", 600, root=True) as r, open(tmp, "wb") as out: shutil.copyfileobj(r, out)
+                if sha256(tmp) != sha.lower(): raise RuntimeError("the download was damaged")
+            except Exception as e:                     # GitHub unreachable: fetch it from a friend who is hosting
+                stamp = None
+                self.say("Couldn't get the toolkit from GitHub (%s); trying a friend who is hosting..." % e)
+                if not self.ensure_zerotier(): self.say("Setup cancelled: ZeroTier is needed first."); return
+                hosts = self.discover(4)
+                addr = self.choose_host(hosts) if hosts else None
+                if not addr: self.say("Nobody is hosting right now either. Try again in a while."); return
+                with self.fetch(addr, "/toolkit.zip", 300) as r, open(tmp, "wb") as out: shutil.copyfileobj(r, out)
             with zipfile.ZipFile(tmp) as z:
                 for n in z.namelist():                           # scripts, plus zombie\ and sounds\ (the Horde's assets)
                     parts = n.replace("\\", "/").split("/")
                     if len(parts) > 2 or ".." in parts or not parts[-1] or (len(parts) == 2 and parts[0] not in ("zombie", "sounds")):
                         continue
                     z.extract(n, tk_dir)
+            if stamp: self.cfg["toolkit_stamp"] = stamp; save(self.cfg)
             self.say("Toolkit installed. Setting up Python (a few minutes the first time)...")
             py = self.python_cmd()
             if not py:
