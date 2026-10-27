@@ -542,6 +542,11 @@ class App(tk.Tk):
 
     def check_update_quiet(self):
         """At start: light up the button when GitHub has a newer build (nothing is downloaded)."""
+        if getattr(sys, "frozen", False) and os.path.exists(sys.executable + ".new"):
+            try: os.remove(sys.executable + ".new")
+            except OSError: pass
+            self.say("The last update couldn't replace this app's file (antivirus often holds a new download while it "
+                     "scans it). Press Update Launcher again; if it keeps failing, download the app from GitHub instead.")
         try:
             have = self.cfg.get("toolkit_stamp")
             if have and os.path.exists(os.path.join(self.toolkit(), "botctl.py")):
@@ -581,10 +586,23 @@ class App(tk.Tk):
             if sha256(new) != sha.lower():
                 os.remove(new); self.say("The download was damaged; nothing changed. Try again."); return
             bat = os.path.join(tempfile.gettempdir(), "outlaws_companion_update.cmd")
-            with open(bat, "w") as f:
-                f.write('@echo off\r\nset PYINSTALLER_RESET_ENVIRONMENT=1\r\nset n=0\r\n:again\r\ntimeout /t 2 /nobreak >nul\r\n'
-                        'move /y "%s" "%s" >nul 2>&1 || (set /a n+=1 & if not %%n%%==15 goto again)\r\n'
-                        'explorer.exe "%s"\r\ndel "%%~f0"\r\n' % (new, exe, exe))      # Explorer starts it: nothing of this copy is inherited
+            log = os.path.join(DATA, "update_log.txt")
+            # 1. wait until this copy (and the exe's own unpacker process) has really exited, 2. swap the files, retrying
+            # for up to 3 minutes (antivirus often holds a new exe while it scans it), 3. start the app through Explorer
+            # (nothing of this copy is inherited). Every step goes to update_log.txt so a failed update can be looked at.
+            lines = ['@echo off', 'set PYINSTALLER_RESET_ENVIRONMENT=1', 'set n=0',
+                     'echo %%date%% %%time%% update to %s: waiting for the old copy to close>> "%s"' % (vtext(num), log),
+                     ':wait']
+            for pid in {os.getpid(), os.getppid()}:
+                lines.append('tasklist /FI "PID eq %d" /NH 2>nul | find " %d " >nul && (ping -n 2 127.0.0.1 >nul & goto wait)' % (pid, pid))
+            lines += [':again',
+                      'if not exist "%s" (echo %%date%% %%time%% the downloaded file is gone - antivirus may have removed it>> "%s" & goto failed)' % (new, log),
+                      'move /y "%s" "%s" >nul 2>&1 && goto done' % (new, exe),
+                      'set /a n+=1', 'if %n% geq 90 goto failed', 'ping -n 3 127.0.0.1 >nul', 'goto again',
+                      ':done', 'echo %%date%% %%time%% updated>> "%s"' % log, 'explorer.exe "%s"' % exe, 'goto end',
+                      ':failed', 'echo %%date%% %%time%% could not replace the app file>> "%s"' % log,
+                      'explorer.exe "%s"' % exe, ':end', 'del "%~f0"']
+            with open(bat, "w") as f: f.write("\r\n".join(lines) + "\r\n")
             self.say("Updating; the app restarts by itself.")
             subprocess.Popen(["cmd", "/c", bat], creationflags=NO_WINDOW, env=clean_env())
             self.after(500, self.destroy)
