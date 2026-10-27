@@ -1010,6 +1010,7 @@ class App(tk.Tk):
                         cmd = game_cmd(game, self.h_screen.get(), char, "127.0.0.1")
                         try:
                             me = subprocess.Popen(cmd, cwd=game)
+                            threading.Thread(target=self.end_with_my_game, args=(me,), daemon=True).start()
                             if kind == "horde":
                                 self.say("Your game is starting as %s and joins the Survivors team by itself." % char)
                                 threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
@@ -1021,6 +1022,33 @@ class App(tk.Tk):
         self.host_cleanup()
         self.after(0, lambda: (self.host_btn.configure(text="START HOSTING"), self.addr_lbl.configure(text="")))
 
+    def own_game_running(self):
+        """Is your own game (not a bot's copy: those run with -userpath) still open? None if Windows can't be asked."""
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='OutlawsAHOM.exe'\" | ForEach-Object { $_.CommandLine }")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                               timeout=20, creationflags=NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode != 0: return None
+        return any(l.strip() and "-userpath" not in l for l in r.stdout.splitlines())
+
+    def end_with_my_game(self, me):
+        """When you close your own game, the hosted game is over: close the bots, every toolkit window and the music,
+        and take the mods out (Close All Windows, without the question)."""
+        me.wait()
+        gone = 0
+        while self.host_proc and self.host_proc.poll() is None:       # (Steam can hand the game to a new process)
+            running = self.own_game_running()
+            gone = gone + 1 if running is False else 0
+            if gone >= 2: break
+            time.sleep(3)
+        if not (self.host_proc and self.host_proc.poll() is None) and not game_running():
+            return                                                     # the match already ended and tidied up
+        self.say("Your game closed: ending the hosted game, closing every window and taking the mods out...")
+        self.after(0, lambda: [b.configure(state="disabled", text="Closing...") for b in self.close_btns])
+        self.close_work(quiet=True)
+
     def close_all(self):
         """Close All Windows: end every Outlaws game copy and every bot (yours, the host's, the bot launcher's), then
         make sure no mod is left in the game folder."""
@@ -1029,13 +1057,17 @@ class App(tk.Tk):
         for b in self.close_btns: b.configure(state="disabled", text="Closing...")
         threading.Thread(target=self.close_work, daemon=True).start()
 
-    def close_work(self):
+    def close_work(self, quiet=False):
         try:
             if self.host_proc and self.host_proc.poll() is None:
                 subprocess.run(["taskkill", "/PID", str(self.host_proc.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
-            ps = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python' -and $_.CommandLine -match "
-                  "'companionhost\\.py|horde\\.py|botctl\\.py|lms\\.py|autojoin\\.py|deathwatch\\.py' } | "
-                  "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }")
+            # every bot-toolkit program: the bots, the music and sounds, the on-screen overlays and their console windows
+            # (never this companion itself, which may be running from companion.py in that same folder)
+            ps = ("Get-CimInstance Win32_Process | Where-Object { ($_.Name -match 'python|cmd|conhost') -and $_.ProcessId -ne %d -and "
+                  "$_.CommandLine -notmatch 'companion\\.py|test_companion|launcher\\.py|launcher\\.cmd' -and $_.CommandLine -match "
+                  "'botctl\\\\[^\\\\ ]+\\.(py|cmd)|companionhost\\.py|horde\\.py|botctl\\.py|lms\\.py|autojoin\\.py|deathwatch\\.py|"
+                  "ambient\\.py|wolf\\.py|deathsound\\.py|tierhud\\.py|welcome\\.py|storm\\.py|announce\\.py' } | "
+                  "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }") % os.getpid()
             subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=60, creationflags=NO_WINDOW)
             for _ in range(2):
                 subprocess.run(["taskkill", "/IM", "OutlawsAHOM.exe", "/F"], capture_output=True, creationflags=NO_WINDOW)
