@@ -358,6 +358,15 @@ class App(tk.Tk):
         return self.cv.create_window(x, y, window=widget, anchor=kw.pop("anchor", "w"), tags=tags, **kw)
 
     # -- helpers
+    def note(self, msg):
+        """A line in companion_log.txt only (not in the window)."""
+        try:
+            os.makedirs(DATA, exist_ok=True)
+            with open(os.path.join(DATA, "companion_log.txt"), "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + vtext(VERSION) + " " + msg.rstrip() + "\n")
+        except OSError:
+            pass
+
     def say(self, msg):
         try:
             os.makedirs(DATA, exist_ok=True)
@@ -394,6 +403,7 @@ class App(tk.Tk):
             else:
                 self.say("Could not fully restore some files; close the game and restart this app.")
         self.refresh_host()
+        self.note("started %s from %s" % (vtext(VERSION), sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)))
         threading.Thread(target=self.check_update_quiet, daemon=True).start()
         if zt_state() != "missing":
             threading.Thread(target=self.ensure_zerotier, daemon=True).start()
@@ -523,20 +533,28 @@ class App(tk.Tk):
             self.say("ZeroTier: %s" % e); return False
 
     # -- updates: the newest OutlawsCompanion.exe is kept in the repo's companion/ folder next to version.txt ("<number> <sha256>")
-    def gh(self, name, timeout=30, root=False):
-        """A file from the GitHub repo. Asks GitHub's API first: raw.githubusercontent.com keeps old copies for about
-        five minutes, so right after a new build it still said the old version ("up to date")."""
+    def gh_commit(self):
+        """The commit main is at right now (one small API call), or None. Files are then read from raw links pinned to
+        that commit: those never serve an old copy, unlike the branch's raw links (cached about five minutes)."""
+        req = urllib.request.Request("https://api.github.com/repos/%s/commits/%s" % (REPO, BRANCH),
+                                     headers={"User-Agent": "OutlawsCompanion", "Accept": "application/vnd.github.sha"})
+        tok = self.cfg.get("github_token")
+        if tok: req.add_header("Authorization", "token " + tok)
+        try:
+            sha = urllib.request.urlopen(req, timeout=15).read().decode().strip()
+            return sha if len(sha) == 40 else None
+        except Exception:
+            return None
+
+    def gh(self, name, timeout=30, root=False, commit=None):
+        """A file from the GitHub repo, from the given commit (or the current one). Without the API (its limit is 60
+        calls an hour per internet connection) it falls back to the branch's raw link, which can be a few minutes old."""
         path = name if root else "companion/" + name
         tok = self.cfg.get("github_token")
-        api = urllib.request.Request("https://api.github.com/repos/%s/contents/%s?ref=%s" % (REPO, path, BRANCH),
-                                     headers={"User-Agent": "OutlawsCompanion", "Accept": "application/vnd.github.raw"})
-        if tok: api.add_header("Authorization", "token " + tok)
-        try:
-            return urllib.request.urlopen(api, timeout=timeout)
-        except Exception:                       # API rate limit (60 an hour) or unreachable: the raw file instead
-            pass
-        url = ("https://raw.githubusercontent.com/%s/%s/" % (REPO, BRANCH) if root else RAW) + name
-        req = urllib.request.Request(url + "?t=%d" % time.time(), headers={"User-Agent": "OutlawsCompanion", "Cache-Control": "no-cache"})
+        ref = commit or self.gh_commit()
+        url = "https://raw.githubusercontent.com/%s/%s/%s" % (REPO, ref or BRANCH, path)
+        req = urllib.request.Request(url if ref else url + "?t=%d" % time.time(),
+                                     headers={"User-Agent": "OutlawsCompanion", "Cache-Control": "no-cache"})
         if tok: req.add_header("Authorization", "token " + tok)
         return urllib.request.urlopen(req, timeout=timeout)
 
@@ -557,6 +575,7 @@ class App(tk.Tk):
             pass
         try:
             num = int(self.gh("version.txt", 15).read().decode().split()[0])
+            self.seen_version = max(getattr(self, "seen_version", 0), num)
             if num > VERSION:
                 self.after(0, lambda: self.upd_btn.configure(text="Update available (%s)" % vtext(num)))
                 self.say("A new launcher version (%s) is on GitHub: press Update available to install it." % vtext(num))
@@ -570,10 +589,15 @@ class App(tk.Tk):
 
     def update_work(self):
         try:
+            commit = self.gh_commit()                  # version.txt and the exe from the same snapshot of the repo
             try:
-                num, sha = self.gh("version.txt").read().decode().split()[:2]
+                num, sha = self.gh("version.txt", commit=commit).read().decode().split()[:2]
             except Exception as e:
                 self.say("Could not reach the update source (%s). If the repository is still private, updates start working once it is public." % e); return
+            seen = getattr(self, "seen_version", 0)
+            if int(num) < seen:
+                self.say("GitHub is still handing out %s although %s is out (its copies are a few minutes old). "
+                         "Try Update Launcher again in about 5 minutes." % (vtext(num), vtext(seen))); return
             if int(num) <= VERSION:
                 self.say("Your launcher is up to date (%s)." % vtext(VERSION)); return
             if game_running() or self.session:
@@ -582,7 +606,7 @@ class App(tk.Tk):
                 self.update_source(num); return
             self.say("Downloading %s..." % vtext(num))
             exe = sys.executable; new = exe + ".new"
-            with self.gh("OutlawsCompanion.exe", 120) as r, open(new, "wb") as f: shutil.copyfileobj(r, f)
+            with self.gh("OutlawsCompanion.exe", 120, commit=commit) as r, open(new, "wb") as f: shutil.copyfileobj(r, f)
             if sha256(new) != sha.lower():
                 os.remove(new); self.say("The download was damaged; nothing changed. Try again."); return
             bat = os.path.join(tempfile.gettempdir(), "outlaws_companion_update.cmd")
