@@ -118,6 +118,35 @@ def hardware():
     except Exception:
         return 0, os.cpu_count() or 0
 
+STANDARD_KEYS = {k.lower() for _, k in MAPS}
+
+def custom_maps(game, toolkit=None):
+    """[(label, key, modes)] for the custom maps in the game folder: every <key>.rcm with its <key>.lab beside it.
+    Name and game modes come from the .rcm (NAME: / MODES:, letters D deathmatch, M team deathmatch ...). Maps the bot
+    toolkit's map scan marked as broken for bots (maps_data.json "skip") are left out."""
+    import re
+    skip = set()
+    try:
+        for m in json.load(open(os.path.join(toolkit or "", "maps_data.json"))):
+            if m.get("skip"): skip.add(m["key"].lower())
+    except Exception:
+        pass
+    out, seen = [], set()
+    try: names = os.listdir(game)
+    except OSError: return []
+    labs = {os.path.splitext(n)[0].lower() for n in names if n.lower().endswith(".lab")}
+    for n in names:
+        key, ext = os.path.splitext(n)
+        if ext.lower() != ".rcm" or key.lower() in STANDARD_KEYS or key.lower() in skip or key.lower() not in labs: continue
+        try: text = open(os.path.join(game, n), "rb").read(65536).decode("latin-1")
+        except OSError: continue
+        nm = re.search(r"NAME:\s*(.+)", text); md = re.search(r"MODES:\s*(\w+)", text)
+        label = (nm.group(1).strip() if nm else "") or key
+        if label.lower() in seen: label = "%s (%s)" % (label, key)
+        seen.add(label.lower())
+        out.append((label, key, md.group(1).upper() if md else ""))
+    return sorted(out, key=lambda t: t[0].lower())
+
 GOG_ID = "1536913668"                    # Outlaws + Handful of Missions: Remaster on GOG
 
 def find_games():
@@ -271,6 +300,7 @@ class App(tk.Tk):
             else:
                 self.pick_folder(first=True)
         self.folder_lbl.configure(text=self.game_dir())
+        self.map_choices()
         if journal_read():
             if game_running():
                 self.say("The game is running with mods from an earlier session; they come out when it closes.")
@@ -297,7 +327,7 @@ class App(tk.Tk):
                 return
             d = os.path.normpath(d)
             if os.path.exists(os.path.join(d, "OutlawsAHOM.exe")):
-                self.cfg["game"] = d; save(self.cfg); self.folder_lbl.configure(text=d); self.refresh_host(); return
+                self.cfg["game"] = d; save(self.cfg); self.folder_lbl.configure(text=d); self.refresh_host(); self.map_choices(); return
             messagebox.showerror(APP, "OutlawsAHOM.exe is not in that folder. Try the folder Steam's 'Browse local files' "
                                  "or GOG Galaxy's 'Show folder' opens.")
 
@@ -624,12 +654,18 @@ class App(tk.Tk):
         self.setup_btn.pack(pady=14, fill="x")
         f = self.form; g = dict(sticky="w", pady=4)
         self.h_game = ttk.Combobox(f, values=[a for a, _ in GAMES], state="readonly", width=22); self.h_game.set(self.cfg.get("h_game", "Survival Horde"))
-        self.h_map = ttk.Combobox(f, values=[a for a, _ in MAPS], state="readonly", width=22); self.h_map.set(self.cfg.get("h_map", "Dry Gulch"))
+        mapcell = ttk.Frame(f)                    # Standard / Custom ticks, then the map list for that choice
+        self.h_mapkind = tk.StringVar(value=self.cfg.get("h_mapkind", "Standard"))
+        ticks = ttk.Frame(mapcell); ticks.pack(anchor="w")
+        for t in ("Standard", "Custom"):
+            ttk.Radiobutton(ticks, text=t, value=t, variable=self.h_mapkind, command=self.map_choices).pack(side="left", padx=(0, 12))
+        self.h_map = ttk.Combobox(mapcell, state="readonly", width=30); self.h_map.pack(anchor="w", pady=(2, 0))
+        self.map_keys = {}
         self.h_bots = tk.IntVar(value=self.cfg.get("h_bots", 3)); self.h_users = tk.IntVar(value=self.cfg.get("h_users", 2))
         self.h_level = ttk.Combobox(f, values=LEVELS, state="readonly", width=22); self.h_level.set(self.cfg.get("h_level", "Normal"))
         self.h_play = tk.BooleanVar(value=True)
         self.h_bots_spin = ttk.Spinbox(f, from_=1, to=7, width=6, textvariable=self.h_bots)
-        for r, (t, w) in enumerate([("Game", self.h_game), ("Map", self.h_map), ("# of Bots (For Normal Games)", self.h_bots_spin),
+        for r, (t, w) in enumerate([("Game", self.h_game), ("Map", mapcell), ("# of Bots (For Normal Games)", self.h_bots_spin),
                                     ("Players, you included", ttk.Spinbox(f, from_=1, to=10, width=6, textvariable=self.h_users)), ("Bot level", self.h_level)]):
             ttk.Label(f, text=t).grid(row=r, column=0, **g); w.grid(row=r, column=1, padx=8, **g)
         self.h_hmode_lbl = ttk.Label(f, text="Horde mode"); self.h_hmode_lbl.grid(row=5, column=0, **g)
@@ -650,9 +686,25 @@ class App(tk.Tk):
         self.host_btn.grid(row=8, column=0, columnspan=2, pady=8, sticky="ew")
         self.addr_lbl = ttk.Label(f, text="", font=("Segoe UI", 11, "bold"), foreground=RUST); self.addr_lbl.grid(row=9, column=0, columnspan=2, sticky="w")
 
+    def map_choices(self):
+        """Fill the Map list: the game's own maps, or the custom maps in your game folder. Only maps that have the
+        chosen game's mode are offered (Survival Horde needs team deathmatch; Sanctuary is made to work for it)."""
+        horde = dict(GAMES).get(self.h_game.get()) == "horde"
+        if self.h_mapkind.get() == "Custom":
+            pairs = [(l, k) for l, k, m in custom_maps(self.game_dir(), self.toolkit()) if ("M" if horde else "D") in m]
+        else:
+            pairs = list(MAPS)
+        self.map_keys = dict(pairs)
+        if not pairs:
+            self.h_map.configure(values=[]); self.h_map.set("(no custom maps in your game folder)"); return
+        names = [l for l, _ in pairs]; self.h_map.configure(values=names)
+        want = self.cfg.get("h_map", "Dry Gulch")
+        self.h_map.set(want if want in names else names[0])
+
     def game_choice(self):
         """Grey out what the chosen game ignores: Horde picks its own bot count and level; Horde mode is Horde-only."""
         horde = dict(GAMES).get(self.h_game.get()) == "horde"
+        self.map_choices()
         self.h_bots_spin.state(["disabled"] if horde else ["!disabled"])
         self.h_level.configure(state="disabled" if horde else "readonly")     # Horde raises the bots' level by itself
         for w in (self.h_hmode_lbl, self.h_hmode):                            # only a Horde game has a Horde mode
@@ -714,6 +766,9 @@ class App(tk.Tk):
         if self.host_proc and self.host_proc.poll() is None: self.stop_host(); return
         if game_running(): messagebox.showinfo(APP, "Close Outlaws first (hosting restarts the game copies)."); return
         kind = dict(GAMES)[self.h_game.get()]
+        map_key = self.map_keys.get(self.h_map.get())
+        if not map_key:
+            messagebox.showinfo(APP, "Pick a map first. (Custom maps are the ones in your Outlaws folder: a .lab and an .rcm file each.)"); return
         if kind == "horde":
             if not messagebox.askyesno(APP, "Survival Horde adds bots until there are 10, and every bot is a full copy of the game.\n\n"
                                        "On a PC that isn't powerful, hosting can slow down or crash your game (and everyone else's). "
@@ -721,10 +776,10 @@ class App(tk.Tk):
         elif self.h_bots.get() > 2 or self.low_pc:
             if not messagebox.askyesno(APP, "Each bot uses a lot of RAM and CPU (it is a full game window).\n\n"
                                        "With %d bots on a PC that isn't powerful, the game can slow down or crash. Keep the number low if unsure.\n\nHost anyway?" % self.h_bots.get()): return
-        cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": kind, "map": dict(MAPS)[self.h_map.get()],
+        cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": kind, "map": map_key,
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
                "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player"}
-        self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
+        self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
                         h_level=self.h_level.get(), h_hmode=self.h_hmode.get()); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
