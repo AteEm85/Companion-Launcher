@@ -11,7 +11,7 @@ from tkinter import ttk, filedialog, messagebox
 APP = "Outlaws Companion"
 DATA = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "OutlawsCompanion")
 CONFIG, JOURNAL, BACKUP = (os.path.join(DATA, n) for n in ("config.json", "journal.json", "backup"))
-VERSION = 16                              # GitHub raises this by itself on every push that changes companion.py
+VERSION = 17                              # GitHub raises this by itself on every push that changes companion.py
 REPO = "AteEm85/Companion-Launcher"     # GitHub builds OutlawsCompanion.exe here on every push (.github/workflows/build.yml)
 BRANCH = "main"
 RAW = "https://raw.githubusercontent.com/%s/%s/companion/" % (REPO, BRANCH)
