@@ -35,6 +35,7 @@ LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare"]
 PARCH, INK, RUST = "#f1e4c3", "#3b2a1a", "#b5530f"
 WIN_W, WIN_H = 580, 790
 PANEL_END = 602
+CLOSE_W = 160
 DARK, TXT, DIM, GOLD, WARN, EDGE = "#120b07", "#f6ead0", "#cdb994", "#f2b24a", "#ff9e6e", "#7a5a32"   # on the dark picture
 BTN, BTN_HOT, BTN_EDGE = "#8a3b12", "#a84a18", "#4a1e08"
 
@@ -275,6 +276,9 @@ class App(tk.Tk):
         st.configure("TButton", background=BTN, foreground=TXT, bordercolor=BTN_EDGE, lightcolor=BTN, darkcolor=BTN_EDGE, padding=6)
         st.map("TButton", background=[("disabled", "#4a3b2c"), ("active", BTN_HOT)], foreground=[("disabled", DIM)])
         st.configure("Big.TButton", font=("Segoe UI", 13, "bold"), padding=10)
+        st.configure("Close.TButton", font=("Segoe UI", 10, "bold"), background="#4a2a18", bordercolor="#2a1408",
+                     lightcolor="#4a2a18", darkcolor="#2a1408")
+        st.map("Close.TButton", background=[("disabled", "#3a2c20"), ("active", "#6a3a20")])
         # Boxes you can change are white; boxes the chosen game ignores are grey, arrow included.
         GREY, GREY_TXT = "#d6cfbd", "#8f8571"
         for w in ("TCombobox", "TSpinbox"):
@@ -593,7 +597,9 @@ class App(tk.Tk):
         self.screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=22)
         self.screen.set(self.cfg.get("screen", "Borderless window")); self.put(self.screen, 210, 178, T)
         self.join_btn = ttk.Button(self, text="JOIN GAME", style="Big.TButton", command=self.join)
-        self.put(self.join_btn, 36, 238, T, width=WIN_W - 72)
+        self.put(self.join_btn, 36, 238, T, width=WIN_W - 72 - CLOSE_W - 10)
+        self.close_btns = [ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all)]
+        self.put(self.close_btns[0], WIN_W - 36, 238, T, anchor="e", width=CLOSE_W, height=48)
         Txt(cv, 36, 280, (
             "Any mods the game needs are downloaded and installed for you, and removed again when you close the game. "
             "Your game joins the host's game by itself, as the character picked above. "
@@ -773,7 +779,9 @@ class App(tk.Tk):
             "Hosting needs the bot toolkit (a one-time download of about 1 MB, plus Python 3 on this PC). "
             "A friend who is hosting right now must be online: I'll fetch it from them."), S, width=WIN_W - 72, anchor="nw")
         self.setup_btn = ttk.Button(self, text="Set up hosting", style="Big.TButton", command=self.setup_toolkit)
-        self.put(self.setup_btn, 36, 210, S, width=WIN_W - 72)
+        self.put(self.setup_btn, 36, 210, S, width=WIN_W - 72 - CLOSE_W - 10)
+        self.close_btns.append(ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all))
+        self.put(self.close_btns[-1], WIN_W - 36, 210, S, anchor="e", width=CLOSE_W, height=48)
         X = 250                                                   # where the boxes start
         self.h_game = ttk.Combobox(self, values=[a for a, _ in GAMES], state="readonly", width=24); self.h_game.set(self.cfg.get("h_game", "Survival Horde"))
         Txt(cv, 36, 130, "Game", F); self.put(self.h_game, X, 130, F)
@@ -815,7 +823,9 @@ class App(tk.Tk):
                 else "If the game stutters, lower the bots.")), F, fill=WARN if low else DIM, font=("Segoe UI", 9),
             width=WIN_W - 72, anchor="nw")
         self.host_btn = ttk.Button(self, text="START HOSTING", style="Big.TButton", command=self.host_toggle)
-        self.put(self.host_btn, 36, 552, F, width=WIN_W - 72)
+        self.put(self.host_btn, 36, 552, F, width=WIN_W - 72 - CLOSE_W - 10)
+        self.close_btns.append(ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all))
+        self.put(self.close_btns[-1], WIN_W - 36, 552, F, anchor="e", width=CLOSE_W, height=48)
         self.addr_lbl = Txt(cv, 36, 588, "", F, fill=GOLD, font=("Segoe UI", 11, "bold"))
         self.h_game.bind("<<ComboboxSelected>>", lambda e: self.game_choice())
         self.game_choice()
@@ -955,6 +965,49 @@ class App(tk.Tk):
         self.say("Hosting ended.")
         self.host_cleanup()
         self.after(0, lambda: (self.host_btn.configure(text="START HOSTING"), self.addr_lbl.configure(text="")))
+
+    def close_all(self):
+        """Close All Windows: end every Outlaws game copy and every bot (yours, the host's, the bot launcher's), then
+        make sure no mod is left in the game folder."""
+        if not messagebox.askyesno(APP, "Close every Outlaws window and bot on this PC (including a game you are hosting), "
+                                   "and take all mods out of the game folder?"): return
+        for b in self.close_btns: b.configure(state="disabled", text="Closing...")
+        threading.Thread(target=self.close_work, daemon=True).start()
+
+    def close_work(self):
+        try:
+            if self.host_proc and self.host_proc.poll() is None:
+                subprocess.run(["taskkill", "/PID", str(self.host_proc.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+            ps = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python' -and $_.CommandLine -match "
+                  "'companionhost\\.py|horde\\.py|botctl\\.py|lms\\.py|autojoin\\.py|deathwatch\\.py' } | "
+                  "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }")
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=60, creationflags=NO_WINDOW)
+            for _ in range(2):
+                subprocess.run(["taskkill", "/IM", "OutlawsAHOM.exe", "/F"], capture_output=True, creationflags=NO_WINDOW)
+                time.sleep(1.5)
+            for _ in range(10):
+                if not game_running(): break
+                time.sleep(1)
+            self.say("Closed every game window and bot.")
+            ok = True
+            for _ in range(10):                                  # mods a join installed (zombie skins, map files ...)
+                if restore_files(): break
+                time.sleep(2)
+            else:
+                ok = False
+            self.session = False
+            tkd = self.toolkit(); py = os.path.join(tkd, ".venv", "Scripts", "python.exe")
+            if os.path.exists(os.path.join(tkd, "companionhost.py")) and os.path.exists(py):      # mods a hosted game installed
+                r = subprocess.run([py, os.path.join(tkd, "companionhost.py"), "--cleanup"], cwd=tkd, capture_output=True,
+                                   text=True, timeout=180, creationflags=NO_WINDOW)
+                ok = ok and r.returncode == 0
+            self.say("All mods are out of your game folder." if ok else
+                     "Some mod files are still in use; press Close All Windows again in a moment.")
+        except Exception as e:
+            self.say("Close All Windows: %s" % e)
+        finally:
+            self.after(0, lambda: [b.configure(state="normal", text="Close All Windows") for b in self.close_btns])
+            self.after(0, lambda: self.host_btn.configure(text="START HOSTING"))
 
     def stop_host(self):
         try:
