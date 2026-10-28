@@ -911,10 +911,6 @@ class App(tk.Tk):
                 threading.Thread(target=self.auto_team, args=(me.pid, "red", True), daemon=True).start()
                 if self.music_path: threading.Thread(target=self.play_music, args=(self.music_path,), daemon=True).start()
                 threading.Thread(target=self.hud_loop, args=(addr,), daemon=True).start()
-            elif addr and man and man.get("humans_team") in OTHER_TEAM:      # team game: the side with fewer bots
-                team = man["humans_team"]
-                self.say("Game starting: it joins the host's game and the %s team by itself (the side with fewer bots)." % team.title())
-                threading.Thread(target=self.auto_team, args=(me.pid, team), daemon=True).start()
             elif addr:
                 self.say("Game starting: it joins the host's game by itself.")
             else:
@@ -1596,14 +1592,12 @@ class App(tk.Tk):
                **lim}
         if kind != "horde" and self.team_game():
             red, blue = self.bot_split()
-            cfg["red_bots"] = red                                       # the rest are blue
-            cfg["humans_team"] = "red" if red < blue else "blue" if blue < red else None   # you join the side with fewer bots
+            cfg["red_bots"] = red                                       # the rest are blue; everyone picks their own team in the lobby
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
                         h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
-        self.host_humans = cfg.get("humans_team")                           # the team your own game joins (None: you pick)
         threading.Thread(target=self.host_work, args=(jf, True, kind), daemon=True).start()
 
     def host_work(self, jf, play, kind):
@@ -1631,10 +1625,6 @@ class App(tk.Tk):
                             if kind == "horde":
                                 self.say("Your game is starting as %s and joins the Survivors team by itself." % char)
                                 threading.Thread(target=self.auto_team, args=(me.pid, "red", True), daemon=True).start()
-                            elif getattr(self, "host_humans", None):
-                                self.say("Your own game is starting and joins the %s team by itself (the side with fewer bots)."
-                                         % self.host_humans.title())
-                                threading.Thread(target=self.auto_team, args=(me.pid, self.host_humans), daemon=True).start()
                             else:
                                 self.say("Your own game is starting.")
                         except OSError as e: self.say("Could not start your game: %s" % e)
