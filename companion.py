@@ -238,6 +238,14 @@ def journal_write(j):
     os.makedirs(DATA, exist_ok=True)
     with open(JOURNAL, "w") as f: json.dump(j, f)
 
+def install_archive(game, items):
+    """The zombie skins and death sounds as ONE archive the game loads itself (olremaster<N>.lab): loose files don't
+    win on every PC. Written to the journal first, so it always comes out again."""
+    import modlab
+    j = journal_read() or {"game": game, "files": []}
+    j["archive"] = True; journal_write(j)
+    return modlab.build(game, items)
+
 def install_files(game, items):
     """items: [(dest name, downloaded temp path)]. Existing files are moved to the backup folder first; the journal is
     written before every change so a crash can always be undone."""
@@ -257,6 +265,12 @@ def restore_files():
     j = journal_read()
     if not j: return True
     game, ok = j["game"], True
+    if j.get("archive"):                                  # the zombie skins / death sounds archive (modlab.py)
+        try:
+            import modlab
+            if not modlab.remove(game): ok = False
+        except Exception:
+            ok = False
     for e in reversed(j["files"]):
         target = os.path.join(game, e["dest"]); b = os.path.join(BACKUP, e["dest"])
         try:
@@ -682,7 +696,7 @@ class App(tk.Tk):
             os.remove(new); self.say("The downloaded companion.py is broken (%s); nothing changed." % e); return
         shutil.copyfile(me, me + ".bak"); os.replace(new, me)
         try:                                                   # the background picture lives beside it
-            for extra in ("companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py"):
+            for extra in ("companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "modlab.py"):
                 with self.gh(extra, 60, root=True) as r: data = r.read()
                 with open(os.path.join(os.path.dirname(me), extra), "wb") as f: f.write(data)
         except Exception: pass
@@ -758,7 +772,7 @@ class App(tk.Tk):
             if addr is False: self.say("Joining cancelled."); return
             if not addr:
                 self.say("No hosted game found, so no mods were installed. Opening the game anyway: use LAN > Join Game.")
-            game = self.game_dir(); items = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""; self.music_path = None; man = None
+            game = self.game_dir(); items = []; archived = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""; self.music_path = None; man = None
             try:
                 if not addr: raise OSError("no host")
                 for i in range(3):                       # the host hashes its mod files when a game starts: give it time
@@ -778,13 +792,15 @@ class App(tk.Tk):
                 if music:
                     try: self.music_path = self.get_music(addr, music)
                     except Exception as e: self.say("Couldn't get the Horde music (%s)." % e)
+                archived = []                             # zombie skins / death sounds: one archive, not loose files
                 for mod in man.get("mods", []):
                     todo = []
+                    into_archive = mod.get("id") == "zombie_skins"
                     for fl in mod.get("files", []):
                         dest = fl.get("dest", "")
                         if not safe_dest(dest): self.say("Skipped an unexpected file name: %r" % dest); continue
                         cur = os.path.join(game, dest)
-                        if os.path.exists(cur) and sha256(cur) == fl["sha256"]: continue      # already there
+                        if not into_archive and os.path.exists(cur) and sha256(cur) == fl["sha256"]: continue      # already there
                         todo.append(fl)
                     if not todo: self.say("%s: already in place" % mod["title"]); continue
                     new = sum(1 for fl in todo if not self.cached_mod(fl["sha256"]))
@@ -798,14 +814,18 @@ class App(tk.Tk):
                             with self.fetch(addr, fl["url"], 60) as r, open(p, "wb") as out: shutil.copyfileobj(r, out)
                             if sha256(p) != fl["sha256"]: raise RuntimeError("download of %s was damaged" % fl["dest"])
                             self.keep_mod(p, fl["sha256"])
-                        items.append((fl["dest"], p))
+                        (archived if into_archive else items).append((fl["dest"], p))
                     if cached: self.say("%s: %d of %d file(s) were already on this PC." % (mod["title"], cached, len(todo)))
-                if items:
+                if items or archived:
                     if not self.ensure_writable(game): raise RuntimeError("the game folder is protected, so the mods can't be installed")
+                if archived:
+                    path = install_archive(game, archived); self.session = True
+                    self.say("Packed %d zombie file(s) into %s; it is removed when the game closes." % (len(archived), os.path.basename(path)))
+                if items:
                     install_files(game, items); self.session = True
                     self.say("Installed %d mod file(s); they are removed when the game closes." % len(items))
             except Exception as e:
-                if items or journal_read(): restore_files()
+                if items or archived or journal_read(): restore_files()
                 if isinstance(e, RuntimeError):
                     self.say("Stopped: %s" % e); return
                 if addr: self.say("Could not ask the host for mods (%s); joining without." % e)

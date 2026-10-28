@@ -4,7 +4,7 @@ name: Build Outlaws Companion
 on:
   push:
     branches: [main]
-    paths: ["companion.py", "companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "companion.ico", ".github/workflows/build.yml"]
+    paths: ["companion.py", "companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "modlab.py", "companion.ico", ".github/workflows/build.yml"]
   workflow_dispatch:
 permissions:
   contents: write
