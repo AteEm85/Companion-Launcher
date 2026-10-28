@@ -157,7 +157,7 @@ def hardware():
 STANDARD_KEYS = {k.lower() for _, k in MAPS}
 # Each standard map's modes, from its .rcm (MODES: D deathmatch, M team deathmatch, C capture the flag, K chicken, T tag)
 STD_MODES = {"civpow2": "DCKM", "drygulch": "CKMD", "fort": "CKMD", "granary": "CKMD", "hargrove": "DCKM", "lilbatl": "DKM",
-             "mltsimms": "CKMD", "orleans": "CKMD", "thudtowr": "DM", "town_2p": "DKCT", "wilderns": "CKMD"}
+             "mltsimms": "CKMD", "orleans": "CKMD", "thudtowr": "DM", "town_2p": "DKCTM", "wilderns": "CKMD"}   # Sanctuary: Team Play is added for the game (companionhost.py)
 GAME_MODES = [("Deathmatch", "D", "dm"), ("Team deathmatch", "M", "team"), ("Capture the flag", "C", "ctf"),
               ("Chicken (KFC)", "K", "chicken")]       # (shown, .rcm letter, botctl --mode)
 
