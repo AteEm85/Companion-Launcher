@@ -46,6 +46,7 @@ def game_cmd(game, screen, char=None, join=None, horde=False):
 MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "fort"), ("The Granary", "granary"),
         ("Hargrove's Pattern Repair", "hargrove"), ("Bunkers", "lilbatl"), ("Simms At Night", "mltsimms"),
         ("Orleans", "orleans"), ("Thud Tower", "thudtowr"), ("Sanctuary", "town_2p"), ("Wilderness", "wilderns")]
+OTHER_TEAM = {"red": "blue", "blue": "red"}
 RANDOM_MAP = "__random__"        # "Random" at the top of the standard maps: one is picked when hosting starts
 GAMES = [("Survival Horde", "horde"), ("Normal bot game", "dm")]
 LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare"]
@@ -907,9 +908,13 @@ class App(tk.Tk):
             threading.Thread(target=self.check_game_folder, args=(game,), daemon=True).start()
             if addr and mode in ("horde", "dark"):
                 self.say("Game starting: it joins the host's Survival Horde game and the Survivors team by itself.")
-                threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
+                threading.Thread(target=self.auto_team, args=(me.pid, "red", True), daemon=True).start()
                 if self.music_path: threading.Thread(target=self.play_music, args=(self.music_path,), daemon=True).start()
                 threading.Thread(target=self.hud_loop, args=(addr,), daemon=True).start()
+            elif addr and man and man.get("humans_team") in OTHER_TEAM:      # team game: the side with fewer bots
+                team = man["humans_team"]
+                self.say("Game starting: it joins the host's game and the %s team by itself (the side with fewer bots)." % team.title())
+                threading.Thread(target=self.auto_team, args=(me.pid, team), daemon=True).start()
             elif addr:
                 self.say("Game starting: it joins the host's game by itself.")
             else:
@@ -1180,28 +1185,29 @@ class App(tk.Tk):
                 with open(p, encoding="utf-8") as f: return f.read()
         return None
 
-    def auto_team(self, pid, team="red"):
+    def auto_team(self, pid, team="red", horde=False):
         self.on_team = False
-        try: return self._auto_team(pid, team)
+        try: return self._auto_team(pid, team, horde)
         finally: self.on_team = True                             # (also when it couldn't: the overlays may start)
 
-    def _auto_team(self, pid, team="red"):
-        """Put your game on the Survivors (red) team as soon as its lobby shows (what the launcher's autojoin.py does):
-        attach to the game, press Join Red once, let go when the match starts. If anything fails: pick it by hand."""
-        LOBBY_STATE, PICK = 8, {"red": 3, "blue": 4}
+    def _auto_team(self, pid, team="red", horde=False):
+        """Put your game on a team as soon as its lobby shows (what the launcher's autojoin.py does): the Survivors (red)
+        in a Horde game, or the side with fewer bots in a team game. If anything fails: pick it by hand."""
+        LOBBY_STATE, PICK, TEAM_ID = 8, {"red": 3, "blue": 4}, {"red": 1, "blue": 2}
+        name = "the Survivors" if horde else "the %s team" % team.title()
         try:
             import frida
         except ImportError:
-            self.say("Pick the Survivors team in the lobby (this copy can't do it for you)."); return
+            self.say("Pick %s in the lobby (this copy can't do it for you)." % name); return
         js = self.agent_source()
         if not js:
-            self.say("Pick the Survivors team in the lobby (the game agent is missing)."); return
+            self.say("Pick %s in the lobby (the game agent is missing)." % name); return
         session, end = None, time.time() + 150
         while time.time() < end:                                # the game may still be starting
             try: session = frida.get_local_device().attach(pid); break
             except Exception: time.sleep(1.0)
         if session is None:
-            self.say("Couldn't reach your game to pick the team: pick Survivors (red) in the lobby."); return
+            self.say("Couldn't reach your game to pick the team: pick %s in the lobby." % name); return
         script = None
         try:
             script = session.create_script(js); script.on("message", lambda m, d: None); script.load()
@@ -1224,7 +1230,7 @@ class App(tk.Tk):
                         seen = seen or time.time()
                         if time.time() - seen >= 1.5 and time.time() - pressed_at >= 1.0 and presses < 120:
                             api.lobby_join(PICK[team]); pressed_at, presses = time.time(), presses + 1
-                            if presses <= 3 or presses % 10 == 0: self.note("auto team: pressed Join Red (%d)" % presses)
+                            if presses <= 3 or presses % 10 == 0: self.note("auto team: pressed Join %s (%d)" % (team.title(), presses))
                     elif lob.get("pick") != PICK[team] and not presses:
                         self.say("You picked a team yourself, so I left it."); return
                     continue
@@ -1235,15 +1241,16 @@ class App(tk.Tk):
                 except Exception: continue
                 me = next((p for p in (w or {}).get("players") or [] if p.get("local")), None) if (w or {}).get("ok") else None
                 if not me: continue                                 # still loading
-                if me.get("team") == 1:
+                if me.get("team") == TEAM_ID[team]:
                     self.on_team = True
-                    self.note("auto team: on the red team after %d press(es)" % presses)
-                    self.say("You're on the Survivors team. Good luck!"); return
-                if me.get("team") == 2:
-                    self.say("You're on the Horde (blue) team: press Esc and switch to the Survivors (red) if you meant to."); return
-            self.say("Gave up waiting for the lobby: pick the Survivors team by hand.")
+                    self.note("auto team: on the %s team after %d press(es)" % (team, presses))
+                    self.say("You're on %s. Good luck!" % name); return
+                if me.get("team") == TEAM_ID[OTHER_TEAM[team]]:
+                    self.say("You're on the %s team, not %s: press Esc and switch teams if you meant to."
+                             % ("Horde (blue)" if horde else OTHER_TEAM[team].title(), name)); return
+            self.say("Gave up waiting for the lobby: pick %s by hand." % name)
         except Exception as e:
-            self.say("Couldn't pick the team for you (%s): pick Survivors (red) in the lobby." % e)
+            self.say("Couldn't pick the team for you (%s): pick %s in the lobby." % (e, name))
         finally:
             try:
                 if script: script.unload()
@@ -1303,10 +1310,24 @@ class App(tk.Tk):
         self.h_kills = tk.StringVar(value=self.cfg.get("h_kills", "")); self.h_time = tk.StringVar(value=self.cfg.get("h_time", ""))
         self.h_mode = ttk.Combobox(self, state="readonly", width=24)                          # only the map's own modes
         Txt(cv, 36, 330, "Game mode", N); self.put(self.h_mode, X, 330, N)
-        Txt(cv, 36, 364, "Kill limit (blank = none set)", N)
+        Txt(cv, 36, 364, "Limits (blank = none set)", N)
         self.put(ttk.Spinbox(self, from_=1, to=200, width=6, textvariable=self.h_kills), X, 364, N)
-        Txt(cv, 36, 398, "Time limit in minutes", N)
-        self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X, 398, N)
+        Txt(cv, X + 66, 364, "kills", N, fill=DIM, font=("Segoe UI", 9))
+        self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X + 120, 364, N)
+        Txt(cv, X + 186, 364, "minutes", N, fill=DIM, font=("Segoe UI", 9))
+        # Team games: how many of the bots play Red, the rest play Blue (each box fills the other in from "# of Bots").
+        total = max(1, int(self.cfg.get("h_bots", 3) or 3))
+        self.h_red = tk.StringVar(value=str(min(total, int(self.cfg.get("h_red", (total + 1) // 2)))))
+        self.h_blue = tk.StringVar(value=str(total - int(self.h_red.get())))
+        self.red_spin = ttk.Spinbox(self, from_=0, to=7, width=6, textvariable=self.h_red)
+        self.blue_spin = ttk.Spinbox(self, from_=0, to=7, width=6, textvariable=self.h_blue)
+        Txt(cv, 36, 398, "Bots on Red", N); self.put(self.red_spin, X, 398, N)
+        Txt(cv, X + 82, 398, "Bots on Blue", N); self.put(self.blue_spin, X + 190, 398, N)
+        self._split_busy = False
+        self.h_red.trace_add("write", lambda *a: self.split_bots("red"))
+        self.h_blue.trace_add("write", lambda *a: self.split_bots("blue"))
+        self.h_bots.trace_add("write", lambda *a: self.split_bots("total"))
+        self.h_mode.bind("<<ComboboxSelected>>", lambda e: self.botteam_state())
         self.h_map.bind("<<ComboboxSelected>>", lambda e: self.mode_choices())
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
         self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Full screen")
@@ -1367,6 +1388,40 @@ class App(tk.Tk):
         self.h_mode.configure(values=names)
         cur = self.h_mode.get() or self.cfg.get("h_mode", "Deathmatch")
         self.h_mode.set(cur if cur in names else names[0])
+        self.botteam_state()
+
+    def team_game(self):
+        """The chosen normal game is one with red and blue teams (Team deathmatch, Capture the flag)."""
+        return {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get()) in ("team", "ctf")
+
+    def botteam_state(self):
+        for w in (getattr(self, "red_spin", None), getattr(self, "blue_spin", None)):
+            if w is not None: w.state(["!disabled"] if self.team_game() else ["disabled"])
+
+    def split_bots(self, changed):
+        """Keep Bots on Red + Bots on Blue = # of Bots: the box you didn't touch fills itself in."""
+        if self._split_busy: return
+        def num(v, default):
+            try: return int(v.get())
+            except (ValueError, tk.TclError): return default
+        total = max(1, min(7, num(self.h_bots, 1)))
+        red, blue = num(self.h_red, None), num(self.h_blue, None)
+        if changed == "blue" and blue is not None: red = total - max(0, min(total, blue))
+        elif red is None: return                                  # half typed: wait
+        red = max(0, min(total, red))
+        self._split_busy = True
+        try:
+            if changed != "red" or str(red) != self.h_red.get(): self.h_red.set(str(red))
+            if changed != "blue" or str(total - red) != self.h_blue.get(): self.h_blue.set(str(total - red))
+        finally:
+            self._split_busy = False
+
+    def bot_split(self):
+        """(bots on red, bots on blue) for a team game."""
+        try: red = int(self.h_red.get())
+        except ValueError: red = (self.h_bots.get() + 1) // 2
+        total = self.h_bots.get(); red = max(0, min(total, red))
+        return red, total - red
 
     def game_choice(self):
         """Grey out what the chosen game ignores: Horde picks its own bot count and level; Horde mode is Horde-only."""
@@ -1537,12 +1592,18 @@ class App(tk.Tk):
         mode = "horde" if kind == "horde" else {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get(), "dm")
         cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": mode, "map": map_key,
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
-               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and self.h_hmode.get() == "Melee Zombies", **lim}
+               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and self.h_hmode.get() == "Melee Zombies",
+               **lim}
+        if kind != "horde" and self.team_game():
+            red, blue = self.bot_split()
+            cfg["red_bots"] = red                                       # the rest are blue
+            cfg["humans_team"] = "red" if red < blue else "blue" if blue < red else None   # you join the side with fewer bots
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get()); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
+        self.host_humans = cfg.get("humans_team")                           # the team your own game joins (None: you pick)
         threading.Thread(target=self.host_work, args=(jf, True, kind), daemon=True).start()
 
     def host_work(self, jf, play, kind):
@@ -1569,7 +1630,11 @@ class App(tk.Tk):
                             threading.Thread(target=self.end_with_my_game, args=(me,), daemon=True).start()
                             if kind == "horde":
                                 self.say("Your game is starting as %s and joins the Survivors team by itself." % char)
-                                threading.Thread(target=self.auto_team, args=(me.pid,), daemon=True).start()
+                                threading.Thread(target=self.auto_team, args=(me.pid, "red", True), daemon=True).start()
+                            elif getattr(self, "host_humans", None):
+                                self.say("Your own game is starting and joins the %s team by itself (the side with fewer bots)."
+                                         % self.host_humans.title())
+                                threading.Thread(target=self.auto_team, args=(me.pid, self.host_humans), daemon=True).start()
                             else:
                                 self.say("Your own game is starting.")
                         except OSError as e: self.say("Could not start your game: %s" % e)
