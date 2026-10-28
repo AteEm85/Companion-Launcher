@@ -73,6 +73,16 @@ def game_running():
     except Exception:
         return False
 
+def on_network_drive(path):
+    """True for a program on a network share (\\\\server\\share\\... or a mapped network drive)."""
+    p = os.path.abspath(path)
+    if p.startswith("\\\\"): return True
+    try:
+        import ctypes
+        return ctypes.windll.kernel32.GetDriveTypeW(os.path.splitdrive(p)[0] + "\\") == 4      # DRIVE_REMOTE
+    except Exception:
+        return False
+
 def clean_env():
     """This app's environment without PyInstaller's own variables. A new OutlawsCompanion.exe started with them looks
     for Python in THIS copy's temporary folder (deleted when it quits): "Failed to load Python DLL ... python312.dll"."""
@@ -614,6 +624,13 @@ class App(tk.Tk):
 
     def check_update_quiet(self):
         """At start: light up the button when GitHub has a newer build (nothing is downloaded)."""
+        try:                                                # the updater's last word since this copy last started
+            with open(os.path.join(DATA, "update_log.txt"), encoding="utf-8", errors="replace") as f: last = f.read().strip().splitlines()[-1:]
+            if last and ("could not replace" in last[0] or "is gone" in last[0]) and not self.cfg.get("update_fail_seen") == last[0]:
+                self.cfg["update_fail_seen"] = last[0]; save(self.cfg)
+                self.after(0, self.update_failed_prompt)
+        except (OSError, IndexError):
+            pass
         if getattr(sys, "frozen", False) and os.path.exists(sys.executable + ".new"):
             try: os.remove(sys.executable + ".new")
             except OSError: pass
@@ -635,6 +652,12 @@ class App(tk.Tk):
                 self.say("A new launcher version (%s) is on GitHub: press Update available to install it." % vtext(num))
         except Exception:
             pass
+
+    def update_failed_prompt(self):
+        if messagebox.askyesno(APP, "The last update couldn't be installed: Windows wouldn't let the companion replace "
+                               "its own file. That's usually antivirus (check Windows Security > Protection history) or the "
+                               "app running from a network drive.\n\nOpen the download page to get the newest version?"):
+            webbrowser.open("https://github.com/%s/raw/%s/companion/OutlawsCompanion.exe" % (REPO, BRANCH))
 
     def update_launcher(self):
         if self.busy: return
@@ -660,7 +683,15 @@ class App(tk.Tk):
                 self.update_source(num); return
             self.remove_old_copies()
             self.say("Downloading %s..." % vtext(num))
-            exe = sys.executable; new = exe + ".new"
+            exe = sys.executable
+            if on_network_drive(exe):
+                # Run from a network share (a NAS): Windows and the share keep the exe locked long after it closes, so
+                # the file can't be swapped. Install the new version on this PC instead and run it from there.
+                local = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "Programs", "OutlawsCompanion")
+                os.makedirs(local, exist_ok=True)
+                exe = os.path.join(local, "OutlawsCompanion.exe")
+                self.say("This copy runs from a network drive; the new version is installed on this PC (%s)." % local)
+            new = exe + ".new"
             with self.gh("OutlawsCompanion.exe", 120, commit=commit) as r, open(new, "wb") as f: shutil.copyfileobj(r, f)
             if sha256(new) != sha.lower():
                 os.remove(new); self.say("The download was damaged; nothing changed. Try again."); return
