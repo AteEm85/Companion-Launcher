@@ -3,7 +3,7 @@ horde.py installs it when a Survival game starts and removes it when the game en
 Usage: python teamcolors.py on | off | status [--kpf path] [--wait]  (--wait: for off, wait until the game is closed)
 Edits 3 small text files inside Common.kpf (a plain zip): the player tint shader, the scoreboard
 colours and the English team names. Fully reversible: 'off' puts the original text back."""
-import sys, os, time, zipfile, shutil, subprocess
+import sys, os, time, zipfile, shutil, subprocess, struct
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spvpatch                      # same for the Vulkan (SPIR-V) shaders
 import dxpatch                       # recolors the team tint inside the precompiled shaders
@@ -12,6 +12,8 @@ import darkmode                      # the darker, eerier look of Survival (worl
 HERE = os.path.dirname(os.path.abspath(__file__))
 KPF = os.path.join(os.path.dirname(HERE), "Common.kpf")
 BACKUP = os.path.join(HERE, "teamcolors_orig.zip")      # the original Vulkan shaders, so 'off' puts back exactly what was there
+GAME_ORIG = os.path.join(HERE, "teamcolors_game.zip")   # shipped with the app and the toolkit: the game's own sprite shaders, for a
+                                                        # PC whose backup was made from an already-tinted file (before v0.24)
 
 # (entry, [(original, replacement), ...]).  Team 1 (red, the human player) -> purple "Survivors";
 # team 2 (blue, the bots) -> green "Horde".
@@ -66,16 +68,92 @@ def current(kpf=KPF):
 def _mode_ok(kpf, neutral):
     """True when the patched shaders already match the wanted tint mode (coloured or neutral)."""
     try:
-        if not os.path.exists(BACKUP): return True
-        with zipfile.ZipFile(BACKUP) as bz, zipfile.ZipFile(kpf) as z:
-            for n in bz.namelist():
-                want = spvpatch.patch(bz.read(n), neutral)
+        orig = originals()
+        if not orig: return True
+        with zipfile.ZipFile(kpf) as z:
+            have = set(z.namelist())
+            for n, o in orig.items():
+                if n not in have: continue
+                want = spvpatch.patch(o, neutral)
                 return want is None or z.read(n) == want          # one shader is enough to tell
     except Exception:
         return True
     return True
 
 LOG = os.path.join(HERE, "teamcolors_log.txt")
+
+TINT_MODES = (False, True, "horde")      # every way spvpatch can tint the sprites: 'off' must recognise all of them
+
+
+def _patched_copies(orig):
+    """Our patched versions of an original sprite shader (any tint mode)."""
+    out = []
+    for mode in TINT_MODES:
+        try:
+            d = spvpatch.patch(orig, mode)
+        except Exception:
+            d = None
+        if d is not None and d != orig: out.append(d)
+    return out
+
+
+_PURPLE = (struct.pack("<f", 0.6), struct.pack("<f", 0.9))     # the Survivors' purple (spvpatch): never in the game's own shaders
+
+
+def _ours(cur, orig):
+    """A sprite shader we changed: one of our tinted copies, or one holding our purple that the original doesn't
+    (left by older versions of the tint and darkness patches, layered on each other)."""
+    if cur == orig: return False
+    if cur in _patched_copies(orig): return True
+    return all(c in cur and c not in orig for c in _PURPLE)
+
+
+def genuine(b):
+    """True for a game-original sprite shader: plain red and blue team tints, neither switched off. Our tinted copies
+    (any mode, any version) fail this, so a backup can only ever hold the game's own files."""
+    try:
+        r = spvpatch._parse(b)
+        if not r: return False
+        w, ins = r
+        targets, _ft, _consts, val = spvpatch._targets(w, ins)
+        if len(targets) != 2: return False
+        cols = {team: tuple(val(x) for x in w[i + 3:i + 6]) for i, team in targets}
+        if not (spvpatch._close(cols.get("S", (None,) * 3), (1.0, 0.0, 0.0))
+                and spvpatch._close(cols.get("H", (None,) * 3), (0.0, 0.0, 1.0))): return False
+        tid = {w[i + 2] for i, _ in targets}
+        ones = {w[i + 2] for i, op, wc in ins if op == 44 and wc == 6 and all(val(x) == 1.0 for x in w[i + 3:i + 6])}
+        return not any(op == 12 and wc == 8 and w[i + 4] == 46 and w[i + 5] in tid and w[i + 7] in ones for i, op, wc in ins)
+    except Exception:
+        return False
+
+
+def originals():
+    """{shader name: the game's own bytes}: this PC's backup where it is genuine, else the copy shipped with the app."""
+    out = {}
+    for path in (GAME_ORIG, BACKUP):                 # this PC's own backup wins (it matches this PC's game files)
+        try:
+            with zipfile.ZipFile(path) as z:
+                for n in z.namelist():
+                    d = z.read(n)
+                    if genuine(d): out[n] = d
+        except Exception:
+            pass
+    return out
+
+
+def shaders_patched(kpf=KPF):
+    """True when a sprite shader in Common.kpf is still one of our tinted copies, even with the team names and the
+    scoreboard back to normal (an 'off' before v0.24 left the purple-Survivors shaders in)."""
+    try:
+        orig = originals()
+        if not orig: return False
+        with zipfile.ZipFile(kpf) as z:
+            have = set(z.namelist())
+            for n, o in orig.items():
+                if n in have and _ours(z.read(n), o): return True
+    except Exception:
+        return False
+    return False
 
 def _set_theme(want, kpf=KPF, quiet=False, neutral=False):
     """Install ('on') or remove ('off') the theme. Returns True when the file is in the wanted state.
@@ -91,14 +169,14 @@ def _set_theme(want, kpf=KPF, quiet=False, neutral=False):
         if st == want and want == "on" and not _mode_ok(kpf, neutral):
             if not _set_theme("off", kpf, quiet): return False
             st = "off"
-        if st == want: return True
+        if st == want and not (want == "off" and shaders_patched(kpf)): return True
         if os.name == "nt" and running():
             say("Game is running; cannot change Common.kpf now."); return False
         tmp = kpf + ".tmp"
         backups, saved = {}, {}
-        if want == "off" and os.path.exists(BACKUP):
-            with zipfile.ZipFile(BACKUP) as bz:
-                saved = {n: bz.read(n) for n in bz.namelist()}
+        origs = originals()
+        if want == "off":
+            saved = origs
         with zipfile.ZipFile(kpf) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED, allowZip64=True) as zout:
             edits = {e: r for e, r in EDITS}
             for info in zin.infolist():
@@ -114,13 +192,15 @@ def _set_theme(want, kpf=KPF, quiet=False, neutral=False):
                         data = dxpatch.patch(data, want)[0]   # this only undoes an earlier patch
                 elif "spirv/OLHardwareSprite" in info.filename and info.filename.endswith(".frag.spirv"):
                     if want == "on":
+                        if not genuine(data):                # still tinted from an earlier game: start from the original
+                            data = origs.get(info.filename, data)
                         newdata = spvpatch.patch(data, neutral)
                         if newdata is not None:
-                            backups[info.filename] = data
+                            if genuine(data): backups[info.filename] = data
                             data = newdata
                     elif info.filename in saved:
                         orig = saved[info.filename]
-                        if data in (spvpatch.patch(orig), spvpatch.patch(orig, True)):   # still our patched copy (not a newer game file)
+                        if _ours(data, orig):              # still our patched copy (not a newer game file)
                             data = orig
                 ni = zipfile.ZipInfo(info.filename, info.date_time)
                 ni.compress_type = info.compress_type; ni.external_attr = info.external_attr
@@ -129,10 +209,16 @@ def _set_theme(want, kpf=KPF, quiet=False, neutral=False):
             if z.testzip() is not None or state(z) != want or len(z.namelist()) != len(old.namelist()):
                 os.remove(tmp); say("Verification failed; original left untouched."); return False
         os.replace(tmp, kpf)
-        if backups and not os.path.exists(BACKUP):
-            with zipfile.ZipFile(BACKUP, "w", zipfile.ZIP_DEFLATED) as bz:
-                for n, d in backups.items():
-                    bz.writestr(n, d)
+        if backups:                                   # genuine originals only; a backup with stuck copies (pre-v0.24) is replaced
+            try:
+                with zipfile.ZipFile(BACKUP) as bz:
+                    good = all(genuine(bz.read(n)) for n in bz.namelist()) and set(backups) <= set(bz.namelist())
+            except Exception:
+                good = False
+            if not good:
+                with zipfile.ZipFile(BACKUP, "w", zipfile.ZIP_DEFLATED) as bz:
+                    for n, d in backups.items():
+                        bz.writestr(n, d)
         say("Team colors:", "Survival theme installed" if want == "on" else "back to original red/blue")
         return True
     except Exception as e:
@@ -144,7 +230,7 @@ def _set_theme(want, kpf=KPF, quiet=False, neutral=False):
 def dirty(kpf=KPF):
     """True when anything of the Survival look (colours, team names or the darker shaders) is installed."""
     try:
-        return current(kpf) != "off" or darkmode.present(kpf)
+        return current(kpf) != "off" or darkmode.present(kpf) or shaders_patched(kpf)
     except Exception:
         return False
 

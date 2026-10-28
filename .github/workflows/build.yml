@@ -4,7 +4,7 @@ name: Build Outlaws Companion
 on:
   push:
     branches: [main]
-    paths: ["companion.py", "companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "modlab.py", "companion.ico", ".github/workflows/build.yml"]
+    paths: ["companion.py", "companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "modlab.py", "teamcolors_game.zip", "companion.ico", ".github/workflows/build.yml"]
   workflow_dispatch:
 permissions:
   contents: write
@@ -33,7 +33,7 @@ jobs:
       - name: Build
         run: |
           python -m pip install --disable-pip-version-check pyinstaller frida==17.18.0
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --icon companion.ico --collect-all frida --add-data "input_agent.js;." --name OutlawsCompanion --distpath dist companion.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --icon companion.ico --collect-all frida --add-data "input_agent.js;." --add-data "teamcolors_game.zip;." --name OutlawsCompanion --distpath dist companion.py
       - name: Publish
         shell: pwsh
         run: |

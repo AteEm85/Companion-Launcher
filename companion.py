@@ -438,8 +438,8 @@ class App(tk.Tk):
                 self.pick_folder(first=True)
         self.folder_lbl.configure(text=self.game_dir())
         self.map_choices()
-        if self.cfg.get("look_on") and not game_running():
-            threading.Thread(target=self.look_off, daemon=True).start()      # left over from a session that was cut short
+        if not game_running():          # the Survival look left over from a session that was cut short (or stuck by an older version)
+            threading.Thread(target=self.look_check, daemon=True).start()
         if journal_read():
             if game_running():
                 self.say("The game is running with mods from an earlier session; they come out when it closes.")
@@ -763,7 +763,7 @@ class App(tk.Tk):
             os.remove(new); self.say("The downloaded companion.py is broken (%s); nothing changed." % e); return
         shutil.copyfile(me, me + ".bak"); os.replace(new, me)
         try:                                                   # the background picture lives beside it
-            for extra in ("companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "modlab.py"):
+            for extra in ("companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "modlab.py", "teamcolors_game.zip"):
                 with self.gh(extra, 60, root=True) as r: data = r.read()
                 with open(os.path.join(os.path.dirname(me), extra), "wb") as f: f.write(data)
         except Exception: pass
@@ -958,8 +958,18 @@ class App(tk.Tk):
         except Exception as e:
             self.say("Couldn't put in the Survival look (%s)." % e)
 
-    def look_off(self):
-        if not self.cfg.get("look_on"): return
+    def look_check(self):
+        """At start, with the game closed: put the game's colours back if any of the Survival look is still in Common.kpf.
+        Before v0.24 the purple Survivors' tint could stay behind after a Horde game (red purple, blue untinted)."""
+        try:
+            kpf = os.path.join(self.game_dir(), "Common.kpf")
+            if self.cfg.get("look_on") or (os.path.exists(kpf) and self.look_modules().dirty(kpf)):
+                self.look_off(force=True)
+        except Exception as e:
+            self.note("look check: %s" % e)
+
+    def look_off(self, force=False):
+        if not self.cfg.get("look_on") and not force: return
         kpf = os.path.join(self.game_dir(), "Common.kpf")
         try:
             tc = self.look_modules()
