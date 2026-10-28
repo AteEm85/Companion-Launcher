@@ -1195,12 +1195,11 @@ class App(tk.Tk):
         try:
             script = session.create_script(js); script.on("message", lambda m, d: None); script.load()
             api = script.exports_sync
-            # Press Join Red the moment the lobby shows, and keep pressing (every 0.8 s) until the game has taken it:
-            # a press that lands while you are moving the mouse over the team buttons doesn't stop the next one.
-            # Joining over the network the lobby can close and open again while it sets up, so: wait until it has been
-            # up for 1.5 s, press Join Red, press again whenever it is back without a pick, and only call it done once
-            # the lobby has stayed closed for 4 s (the match has started).
-            pressed_at, presses, seen, out_since = 0.0, 0, None, None
+            # Press Join Red whenever the lobby is up without a pick (every 1 s, once it has been up for 1.5 s). Joining over
+            # the network the game shows its lobby state for a moment while it connects, ignores a pick made then, and loads
+            # before the real team screen: so the lobby closing proves nothing. Done only once the game says our own
+            # player is on the red team (the Survivors); if it ends up on blue, say so.
+            pressed_at, presses, seen, checked = 0.0, 0, None, 0.0
             deadline = time.time() + 20 * 60
             while time.time() < deadline:
                 time.sleep(0.25)
@@ -1210,21 +1209,27 @@ class App(tk.Tk):
                     continue
                 if not lob: continue
                 if lob.get("state") == LOBBY_STATE:
-                    out_since = None
                     if lob.get("pick") == 0:
                         seen = seen or time.time()
-                        if time.time() - seen >= 1.5 and time.time() - pressed_at >= 1.0:
+                        if time.time() - seen >= 1.5 and time.time() - pressed_at >= 1.0 and presses < 120:
                             api.lobby_join(PICK[team]); pressed_at, presses = time.time(), presses + 1
-                            self.note("auto team: pressed Join Red (%d)" % presses)
+                            if presses <= 3 or presses % 10 == 0: self.note("auto team: pressed Join Red (%d)" % presses)
                     elif lob.get("pick") != PICK[team] and not presses:
                         self.say("You picked a team yourself, so I left it."); return
-                else:
-                    seen = None
-                    if presses:
-                        out_since = out_since or time.time()
-                        if time.time() - out_since >= 4.0:
-                            self.on_team = True
-                            self.say("You're on the Survivors team. Good luck!"); return
+                    continue
+                seen = None
+                if time.time() - checked < 1.0: continue
+                checked = time.time()
+                try: w = api.world()
+                except Exception: continue
+                me = next((p for p in (w or {}).get("players") or [] if p.get("local")), None) if (w or {}).get("ok") else None
+                if not me: continue                                 # still loading
+                if me.get("team") == 1:
+                    self.on_team = True
+                    self.note("auto team: on the red team after %d press(es)" % presses)
+                    self.say("You're on the Survivors team. Good luck!"); return
+                if me.get("team") == 2:
+                    self.say("You're on the Horde (blue) team: press Esc and switch to the Survivors (red) if you meant to."); return
             self.say("Gave up waiting for the lobby: pick the Survivors team by hand.")
         except Exception as e:
             self.say("Couldn't pick the team for you (%s): pick Survivors (red) in the lobby." % e)
@@ -1275,16 +1280,14 @@ class App(tk.Tk):
         self.h_level = ttk.Combobox(self, values=LEVELS, state="readonly", width=24); self.h_level.set(self.cfg.get("h_level", "Normal"))
         Txt(cv, 36, 296, "Bot level", F); self.put(self.h_level, X, 296, F)
         H = ("host_form", "hmode")
-        HMODES = ["Normal", "Challenge"]                          # Dark Mode: held back until it's ready for the companion
+        HMODES = ["Normal", "Challenge", "Melee Zombies"]         # Dark Mode: held back until it's ready for the companion
+                                                                  # Melee Zombies: Mary and Two Feathers, knives and fists only
         self.h_hmode = ttk.Combobox(self, values=HMODES, state="readonly", width=24)
         self.h_hmode.set(self.cfg.get("h_hmode") if self.cfg.get("h_hmode") in HMODES else "Normal")
         Txt(cv, 36, 330, "Horde mode", H); self.put(self.h_hmode, X, 330, H)
         self.h_char = ttk.Combobox(self, values=CHARS, state="readonly", width=24)            # yours, in a Horde game
         self.h_char.set(self.cfg.get("h_char") if self.cfg.get("h_char") in CHARS else CHARS[0])
         Txt(cv, 36, 364, "Your character", H); self.put(self.h_char, X, 364, H)
-        self.h_melee = tk.BooleanVar(value=bool(self.cfg.get("h_melee", False)))          # knives and fists only
-        self.melee_tick = Txt(cv, 36, 398, "", H, font=("Segoe UI Symbol", 10))
-        self.melee_tick.bind(lambda: (self.h_melee.set(not self.h_melee.get()), self.draw_ticks()))
         N = ("host_form", "normal")                               # a normal game's limits, in the same place (blank: none set)
         self.h_kills = tk.StringVar(value=self.cfg.get("h_kills", "")); self.h_time = tk.StringVar(value=self.cfg.get("h_time", ""))
         self.h_mode = ttk.Combobox(self, state="readonly", width=24)                          # only the map's own modes
@@ -1323,7 +1326,6 @@ class App(tk.Tk):
         for t, tick in self.kind_ticks.items():
             tick.configure(text=("◉ " if self.h_mapkind.get() == t else "○ ") + t)
         self.trim_tick.configure(text=("☑ " if self.h_trim.get() else "☐ ") + "Trim Idle Bot Memory (Lowers RAM Usage)")
-        self.melee_tick.configure(text=("☑ " if self.h_melee.get() else "☐ ") + "Melee zombies (Mary and Two Feathers, knives and fists only)")
 
     def map_choices(self):
         """Fill the Map list: the game's own maps, or the custom maps in your game folder. Only maps that have the
@@ -1490,9 +1492,9 @@ class App(tk.Tk):
         mode = "horde" if kind == "horde" else {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get(), "dm")
         cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": mode, "map": map_key,
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
-               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and bool(self.h_melee.get()), **lim}
+               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and self.h_hmode.get() == "Melee Zombies", **lim}
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get(), h_melee=bool(self.h_melee.get())); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get()); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
