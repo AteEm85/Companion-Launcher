@@ -658,6 +658,7 @@ class App(tk.Tk):
                 self.say("%s is available. Close the game first, then press Update Launcher." % vtext(num)); return
             if not getattr(sys, "frozen", False):
                 self.update_source(num); return
+            self.remove_old_copies()
             self.say("Downloading %s..." % vtext(num))
             exe = sys.executable; new = exe + ".new"
             with self.gh("OutlawsCompanion.exe", 120, commit=commit) as r, open(new, "wb") as f: shutil.copyfileobj(r, f)
@@ -688,6 +689,34 @@ class App(tk.Tk):
             self.say("Update failed: %s" % e)
         finally:
             self.after(0, lambda: self.upd_btn.configure(state="normal", text="Update Launcher"))
+
+    def remove_old_copies(self):
+        """Before an update: delete older copies of this app (OutlawsCompanion*.exe in its own folder, Downloads,
+        Desktop and Documents) and leftovers of earlier updates, so only one copy is left to open afterwards. Only
+        files that really are this app are removed, never the copy that is running, and never one that is in use."""
+        if not getattr(sys, "frozen", False): return
+        me = os.path.normcase(os.path.abspath(sys.executable))
+        home = os.path.expanduser("~")
+        dirs = {os.path.dirname(sys.executable)} | {os.path.join(home, d) for d in ("Downloads", "Desktop", "Documents")}
+        removed = []
+        for d in dirs:
+            try: names = os.listdir(d)
+            except OSError: continue
+            for n in names:
+                low = n.lower(); p = os.path.join(d, n)
+                if os.path.normcase(os.path.abspath(p)) == me: continue
+                leftover = low.startswith("outlawscompanion") and low.endswith((".exe.new", ".exe.bak", ".exe.old"))
+                copy = low.startswith("outlawscompanion") and low.endswith(".exe")
+                if not (leftover or copy) or not os.path.isfile(p): continue
+                try:
+                    if copy:                                          # only this app (its built-in background picture)
+                        with open(p, "rb") as f: data = f.read()
+                        if b"companion_bg" not in data: continue
+                    os.remove(p); removed.append(p)
+                except OSError:
+                    pass                                              # in use (open) or not ours to delete: left alone
+        for p in removed: self.note("removed an old copy: %s" % p)
+        if removed: self.say("Removed %d old copy/copies of the companion." % len(removed))
 
     def update_source(self, num):
         """Running companion.py itself: fetch the new companion.py from GitHub, rebuild the exe (build_companion.cmd)
