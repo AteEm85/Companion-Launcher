@@ -693,6 +693,7 @@ class App(tk.Tk):
                 local = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "Programs", "OutlawsCompanion")
                 os.makedirs(local, exist_ok=True)
                 exe = os.path.join(local, "OutlawsCompanion.exe")
+                self.cfg["replace_old"] = sys.executable; self.cfg.pop("replace_old_tries", None); save(self.cfg)   # updated later
                 self.say("This copy runs from a network drive; the new version is installed on this PC (%s)." % local)
             new = exe + ".new"
             with self.gh("OutlawsCompanion.exe", 120, commit=commit) as r, open(new, "wb") as f: shutil.copyfileobj(r, f)
@@ -1791,9 +1792,67 @@ class SoundChannel:
 MUSIC, FX = SoundChannel(), SoundChannel()
 
 
+def log_line(msg):
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        with open(os.path.join(DATA, "companion_log.txt"), "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + vtext(VERSION) + " " + msg.rstrip() + "\n")
+    except OSError:
+        pass
+
+
+def hand_over():
+    """An older copy of the app was opened (an old download, a pin to the copy on a network drive): start the newest
+    installed copy instead and close. The newest copy to run writes down where it is. True = this copy should exit."""
+    if not getattr(sys, "frozen", False): return False
+    cfg = load()
+    inst = cfg.get("installed") or {}
+    path, ver = inst.get("path") or "", int(inst.get("version") or 0)
+    me = os.path.normcase(os.path.abspath(sys.executable))
+    if ver > VERSION and path and os.path.normcase(os.path.abspath(path)) != me and os.path.isfile(path):
+        log_line("this copy (%s) is older than the one at %s (%s): starting that one" % (sys.executable, path, vtext(ver)))
+        try:
+            subprocess.Popen(["explorer.exe", path], env=clean_env()); return True
+        except OSError:
+            return False
+    if ver <= VERSION:
+        cfg["installed"] = {"path": sys.executable, "version": VERSION}; save(cfg)
+    return False
+
+
+def refresh_old_copy():
+    """After an update from a network drive the new version runs from this PC, while the copy on the share stays old (the
+    share kept it locked). Once it is free, put this version over it too, so opening it from there is current as well."""
+    if not getattr(sys, "frozen", False): return
+    cfg = load(); old = cfg.get("replace_old")
+    if not old or os.path.normcase(os.path.abspath(old)) == os.path.normcase(os.path.abspath(sys.executable)): return
+    tries = int(cfg.get("replace_old_tries", 0)) + 1
+    try:
+        if not os.path.isfile(old): raise FileNotFoundError(old)
+        with open(old, "rb") as f: head = f.read()
+        if b"companion_bg" not in head: raise ValueError("not this app")
+        if sha256(old) != sha256(sys.executable):
+            shutil.copyfile(sys.executable, old + ".new")
+            os.replace(old + ".new", old)
+            log_line("the copy at %s is now %s too" % (old, vtext(VERSION)))
+        cfg.pop("replace_old", None); cfg.pop("replace_old_tries", None)
+    except (FileNotFoundError, ValueError):
+        cfg.pop("replace_old", None); cfg.pop("replace_old_tries", None)
+    except OSError as e:
+        try: os.remove(old + ".new")
+        except OSError: pass
+        if tries >= 20:
+            log_line("gave up updating the copy at %s (%s)" % (old, e)); cfg.pop("replace_old", None); cfg.pop("replace_old_tries", None)
+        else:
+            cfg["replace_old_tries"] = tries
+    save(cfg)
+
+
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--sound-server"]:
         try: sound_server(sys.argv[2])
         except Exception: pass
         sys.exit(0)
+    if hand_over(): sys.exit(0)
+    threading.Thread(target=refresh_old_copy, daemon=True).start()
     App().mainloop()
