@@ -1298,6 +1298,34 @@ class App(tk.Tk):
             self.busy = False
             self.after(0, lambda: (self.setup_btn.configure(state="normal", text="Set up hosting"), self.refresh_host()))
 
+    def host_warning(self, key, text):
+        """The 'bots use a lot of RAM and CPU' question before hosting, with a 'Do Not Show This Again' tick box.
+        Once ticked (and answered Yes), that warning is skipped from then on. True = host."""
+        if self.cfg.get("skip_warning_" + key): return True
+        win = tk.Toplevel(self); win.title(APP); win.configure(bg=DARK); win.resizable(False, False); win.transient(self)
+        try: win.iconphoto(False, self.icon_img)
+        except Exception: pass
+        ans, dont = [False], tk.BooleanVar(value=False)
+        tk.Label(win, text=text, bg=DARK, fg=TXT, font=("Segoe UI", 10), wraplength=420, justify="left").pack(padx=18, pady=(16, 10), anchor="w")
+        tk.Checkbutton(win, text="Do Not Show This Again", variable=dont, bg=DARK, fg=TXT, selectcolor="#2a1a10",
+                       activebackground=DARK, activeforeground=GOLD, font=("Segoe UI", 10)).pack(padx=14, anchor="w")
+        row = tk.Frame(win, bg=DARK); row.pack(pady=(10, 14), padx=18, anchor="e")
+        def done(yes):
+            ans[0] = yes
+            if yes and dont.get():
+                self.cfg["skip_warning_" + key] = True; save(self.cfg)
+            win.destroy()
+        ttk.Button(row, text="Host anyway", command=lambda: done(True)).pack(side="left", padx=(0, 8))
+        ttk.Button(row, text="Cancel", command=lambda: done(False)).pack(side="left")
+        win.protocol("WM_DELETE_WINDOW", lambda: done(False))
+        win.bind("<Escape>", lambda e: done(False))
+        win.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - win.winfo_reqwidth()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - win.winfo_reqheight()) // 3
+        win.geometry("+%d+%d" % (max(0, x), max(0, y)))
+        win.grab_set(); win.focus_set(); self.wait_window(win)
+        return ans[0]
+
     def host_toggle(self):
         if self.host_proc and self.host_proc.poll() is None: self.stop_host(); return
         if game_running(): messagebox.showinfo(APP, "Close Outlaws first (hosting restarts the game copies)."); return
@@ -1313,11 +1341,11 @@ class App(tk.Tk):
                     messagebox.showinfo(APP, "%s must be a whole number (or blank)." % name); return
                 lim[k] = v
         if kind == "horde":
-            if not messagebox.askyesno(APP, "Survival Horde adds bots until there are 10, and every bot is a full copy of the game.\n\n"
+            if not self.host_warning("horde", "Survival Horde adds bots until there are 10, and every bot is a full copy of the game.\n\n"
                                        "On a PC that isn't powerful, hosting can slow down or crash your game (and everyone else's). "
                                        "If your hardware isn't good, join a Horde game someone else hosts instead.\n\nHost it anyway?"): return
         elif self.h_bots.get() > 2 or self.low_pc:
-            if not messagebox.askyesno(APP, "Each bot uses a lot of RAM and CPU (it is a full game window).\n\n"
+            if not self.host_warning("bots", "Each bot uses a lot of RAM and CPU (it is a full game window).\n\n"
                                        "With %d bots on a PC that isn't powerful, the game can slow down or crash. Keep the number low if unsure.\n\nHost anyway?" % self.h_bots.get()): return
         mode = "horde" if kind == "horde" else {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get(), "dm")
         cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": mode, "map": map_key,
