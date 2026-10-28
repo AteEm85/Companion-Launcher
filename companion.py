@@ -1281,6 +1281,9 @@ class App(tk.Tk):
         self.h_char = ttk.Combobox(self, values=CHARS, state="readonly", width=24)            # yours, in a Horde game
         self.h_char.set(self.cfg.get("h_char") if self.cfg.get("h_char") in CHARS else CHARS[0])
         Txt(cv, 36, 364, "Your character", H); self.put(self.h_char, X, 364, H)
+        self.h_melee = tk.BooleanVar(value=bool(self.cfg.get("h_melee", False)))          # knives and fists only
+        self.melee_tick = Txt(cv, 36, 398, "", H, font=("Segoe UI Symbol", 10))
+        self.melee_tick.bind(lambda: (self.h_melee.set(not self.h_melee.get()), self.draw_ticks()))
         N = ("host_form", "normal")                               # a normal game's limits, in the same place (blank: none set)
         self.h_kills = tk.StringVar(value=self.cfg.get("h_kills", "")); self.h_time = tk.StringVar(value=self.cfg.get("h_time", ""))
         self.h_mode = ttk.Combobox(self, state="readonly", width=24)                          # only the map's own modes
@@ -1319,6 +1322,7 @@ class App(tk.Tk):
         for t, tick in self.kind_ticks.items():
             tick.configure(text=("◉ " if self.h_mapkind.get() == t else "○ ") + t)
         self.trim_tick.configure(text=("☑ " if self.h_trim.get() else "☐ ") + "Trim Idle Bot Memory (Lowers RAM Usage)")
+        self.melee_tick.configure(text=("☑ " if self.h_melee.get() else "☐ ") + "Melee only (knives and fists; the zombies are Mary and Two Feathers)")
 
     def map_choices(self):
         """Fill the Map list: the game's own maps, or the custom maps in your game folder. Only maps that have the
@@ -1474,9 +1478,9 @@ class App(tk.Tk):
         mode = "horde" if kind == "horde" else {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get(), "dm")
         cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": mode, "map": map_key,
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
-               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), **lim}
+               "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and bool(self.h_melee.get()), **lim}
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get()); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get(), h_melee=bool(self.h_melee.get())); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP HOSTING")
