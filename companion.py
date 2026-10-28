@@ -1306,7 +1306,7 @@ class App(tk.Tk):
         self.h_kills = tk.StringVar(value=self.cfg.get("h_kills", "")); self.h_time = tk.StringVar(value=self.cfg.get("h_time", ""))
         self.h_mode = ttk.Combobox(self, state="readonly", width=24)                          # only the map's own modes
         Txt(cv, 36, 330, "Game mode", N); self.put(self.h_mode, X, 330, N)
-        Txt(cv, 36, 364, "Limits (blank = none set)", N)
+        Txt(cv, 36, 364, "Limits (blank = no limit)", N)
         self.put(ttk.Spinbox(self, from_=1, to=200, width=6, textvariable=self.h_kills), X, 364, N)
         Txt(cv, X + 66, 364, "kills", N, fill=DIM, font=("Segoe UI", 9))
         self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X + 120, 364, N)
