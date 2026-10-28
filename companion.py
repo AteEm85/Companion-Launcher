@@ -1322,7 +1322,7 @@ class App(tk.Tk):
         for t, tick in self.kind_ticks.items():
             tick.configure(text=("◉ " if self.h_mapkind.get() == t else "○ ") + t)
         self.trim_tick.configure(text=("☑ " if self.h_trim.get() else "☐ ") + "Trim Idle Bot Memory (Lowers RAM Usage)")
-        self.melee_tick.configure(text=("☑ " if self.h_melee.get() else "☐ ") + "Melee only (knives and fists; the zombies are Mary and Two Feathers)")
+        self.melee_tick.configure(text=("☑ " if self.h_melee.get() else "☐ ") + "Melee zombies (Mary and Two Feathers, knives and fists only)")
 
     def map_choices(self):
         """Fill the Map list: the game's own maps, or the custom maps in your game folder. Only maps that have the
