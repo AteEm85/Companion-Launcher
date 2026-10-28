@@ -28,15 +28,20 @@ SCREENS = {"Window": (["-window", "-width", "1280", "-height", "720"], "0"),    
            "Borderless window": ([], "1"),
            "Full screen": (["-fullscreen"], "2")}
 
-def game_cmd(game, screen, char=None, join=None):
+def game_cmd(game, screen, char=None, join=None, horde=False):
     """The command line for your own game. The game reads ONE -setvar block (name value name value ...): a second
-    -setvar is ignored, which is how the character got lost before. So every setting goes in a single block, last."""
+    -setvar is ignored, which is how the character got lost before. So every setting goes in a single block, last.
+    horde=True: the Survival look only exists in the Vulkan shaders (the game rejects edited Direct3D ones), so the game
+    runs on Vulkan; and "Full screen" becomes borderless full screen, because nothing (the banner, the tier label, the
+    lightning) can be drawn over a game in exclusive full screen."""
+    if horde and screen == "Full screen": screen = "Borderless window"
     flags, winmode = SCREENS.get(screen, ([], None))
     cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies"] + flags
     if join: cmd += ["-join", join]
     setvars = []
     if winmode is not None: setvars += ["v_windowmode", winmode]
     if char in CHARS: setvars += ["mp_defaultChar", str(CHARS.index(char) + 1)]
+    if horde: setvars += ["r_rhirenderfamily", "vulkan"]
     return cmd + (["-setvar"] + setvars if setvars else [])
 MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "fort"), ("The Granary", "granary"),
         ("Hargrove's Pattern Repair", "hargrove"), ("Bunkers", "lilbatl"), ("Simms At Night", "mltsimms"),
@@ -833,7 +838,7 @@ class App(tk.Tk):
             if addr and mode in ("horde", "dark"):
                 zombies = any(m.get("id") == "zombie_skins" for m in man.get("mods", [])) if man else False
                 self.look_on(game, zombies, dark="flash" if mode == "dark" else True)
-            cmd = game_cmd(game, self.screen.get(), self.char.get(), addr)      # addr: straight into the host's game
+            cmd = game_cmd(game, self.screen.get(), self.char.get(), addr, horde=bool(addr) and mode in ("horde", "dark"))
             try: me = subprocess.Popen(cmd, cwd=game)
             except OSError as e:
                 self.say("Could not start the game: %s" % e); restore_files(); self.session = False; return
@@ -927,7 +932,7 @@ class App(tk.Tk):
         except Exception:
             w.deiconify()
 
-    def thunder(self):
+    def thunder(self, volume=1.0):
         """One of the game's own thunder sounds (read from its sound archive once), as the host's banner plays it."""
         try:
             import winsound, struct, random
@@ -947,7 +952,19 @@ class App(tk.Tk):
                                 with open(cache, "wb") as out: out.write(f.read(size))
                                 break
                     if os.path.exists(cache): break
-            if os.path.exists(cache): winsound.PlaySound(cache, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            play = cache
+            if os.path.exists(cache) and volume < 0.99:            # a quieter copy (a distant storm)
+                quiet = cache[:-4] + "_far.wav"
+                if not os.path.exists(quiet):
+                    import wave, array
+                    with wave.open(cache, "rb") as src: prm, frames = src.getparams(), src.readframes(src.getnframes())
+                    if prm.sampwidth == 2:
+                        a = array.array("h"); a.frombytes(frames); frames = array.array("h", (int(x * volume) for x in a)).tobytes()
+                    elif prm.sampwidth == 1:
+                        frames = bytes(128 + int((x - 128) * volume) for x in frames)
+                    with wave.open(quiet, "wb") as dst: dst.setparams(prm); dst.writeframes(frames)
+                play = quiet
+            if os.path.exists(play): FX.send("play", play)
         except Exception:
             pass
 
@@ -983,6 +1000,31 @@ class App(tk.Tk):
             w.after(40, tick)
         tick()
 
+    def storm_flash(self):
+        """One lightning flash over the whole screen (faint, see-through, click-through), as the host's storm.py does."""
+        w = self.overlay("#c9cdd8", 0.0)
+        w.geometry("%dx%d+0+0" % (w.winfo_screenwidth(), w.winfo_screenheight())); self.show_no_focus(w)
+        steps = [(0.20, 60), (0.0, 80), (0.14, 60), (0.07, 70), (0.03, 80)]
+        def step():
+            if not steps: w.destroy(); return
+            a, ms = steps.pop(0)
+            try: w.attributes("-alpha", a)
+            except tk.TclError: return
+            w.after(ms, step)
+        step()
+
+    def storm_loop(self, running):
+        """A distant storm while the Horde game runs: every 50-110 s a flash, then thunder 0.7-2.4 s later."""
+        import random
+        nxt = time.time() + random.uniform(25, 45)
+        while running[0] and game_running():
+            if time.time() >= nxt:
+                self.after(0, self.storm_flash)
+                time.sleep(random.uniform(0.7, 2.4))
+                self.thunder(0.45)
+                nxt = time.time() + random.uniform(50, 110)
+            time.sleep(0.5)
+
     def tier_label(self):
         KEY = "#010101"; w = self.overlay(KEY, 0.85, transparent=True)
         W, H = 260, 24
@@ -1008,6 +1050,8 @@ class App(tk.Tk):
         if not game_running(): return
         time.sleep(2.5)                                          # let the map appear first
         self.after(0, self.welcome)
+        storming = [True]
+        threading.Thread(target=self.storm_loop, args=(storming,), daemon=True).start()
         hud, shown, fails = [None], [None], 0
         try:
             while game_running():
@@ -1028,6 +1072,7 @@ class App(tk.Tk):
                     self.after(0, upd)
                 time.sleep(1)
         finally:
+            storming[0] = False
             self.after(0, lambda: hud[0] and hud[0][0].destroy())
 
     def get_music(self, addr, entry):
@@ -1047,12 +1092,11 @@ class App(tk.Tk):
         except ImportError: return
         t0 = time.time()
         while not game_running() and time.time() - t0 < 180: time.sleep(2)
+        MUSIC.send("loop", path)
         try:
-            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
             while game_running(): time.sleep(3)
         finally:
-            try: winsound.PlaySound(None, 0)
-            except Exception: pass
+            MUSIC.send("stop")
 
     def agent_source(self):
         """input_agent.js (the bot toolkit's game agent; knows the Steam and the GOG game): built into the exe, or
@@ -1395,7 +1439,7 @@ class App(tk.Tk):
                     if play:
                         game = self.game_dir()
                         char = self.h_char.get() if kind == "horde" else self.char.get()
-                        cmd = game_cmd(game, self.h_screen.get(), char, "127.0.0.1")
+                        cmd = game_cmd(game, self.h_screen.get(), char, "127.0.0.1", horde=(kind == "horde"))
                         try:
                             me = subprocess.Popen(cmd, cwd=game)
                             threading.Thread(target=self.end_with_my_game, args=(me,), daemon=True).start()
@@ -1529,5 +1573,48 @@ class App(tk.Tk):
             self.say("Could not start the mod clean-up: %s" % e)
 
 
+def sound_server(port):
+    """OutlawsCompanion --sound-server <port>: a background copy of this app that plays the sounds it is told over a
+    local connection ('play <wav>', 'loop <wav>', 'stop'). Windows plays one sound at a time per program, so the music
+    and the effects (thunder) each get their own and never cut each other off. It ends when this app closes."""
+    import winsound, socket
+    c = socket.create_connection(("127.0.0.1", int(port)), timeout=30); c.settimeout(None)
+    for line in c.makefile("r", encoding="utf-8"):
+        cmd, _, path = line.strip().partition(" ")
+        try:
+            if cmd == "play": winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            elif cmd == "loop": winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+            elif cmd == "stop": winsound.PlaySound(None, 0)
+        except Exception:
+            pass
+
+
+class SoundChannel:
+    """One sound helper, started the first time it is used and then kept (one start: the packed exe unpacks once)."""
+    def __init__(self): self.conn = None; self.lock = threading.Lock()
+    def _start(self):
+        import socket
+        srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1); srv.settimeout(30)
+        me = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, os.path.abspath(__file__)]
+        subprocess.Popen(me + ["--sound-server", str(srv.getsockname()[1])], creationflags=NO_WINDOW, env=clean_env())
+        try: self.conn = srv.accept()[0]
+        finally: srv.close()
+    def send(self, cmd, path=""):
+        with self.lock:
+            for _ in range(2):
+                try:
+                    if self.conn is None: self._start()
+                    self.conn.sendall((("%s %s" % (cmd, path)).strip() + "\n").encode("utf-8")); return
+                except OSError:
+                    self.conn = None
+
+
+MUSIC, FX = SoundChannel(), SoundChannel()
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--sound-server"]:
+        try: sound_server(sys.argv[2])
+        except Exception: pass
+        sys.exit(0)
     App().mainloop()
