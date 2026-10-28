@@ -4,7 +4,7 @@ downloads and installs only those, starts your game and puts everything back as 
 HOST: sets up the bot toolkit once, then hosts a bot game with a few simple choices.
 Your own files are never overwritten: whatever is replaced is backed up first and restored afterwards (also after a crash:
 the next start puts it right). Standard library only; build with build_companion.cmd."""
-import os, sys, json, time, shutil, hashlib, threading, subprocess, urllib.request, zipfile, tempfile, webbrowser
+import os, sys, json, time, shutil, hashlib, threading, subprocess, urllib.request, zipfile, tempfile, webbrowser, random
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -46,6 +46,7 @@ def game_cmd(game, screen, char=None, join=None, horde=False):
 MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "fort"), ("The Granary", "granary"),
         ("Hargrove's Pattern Repair", "hargrove"), ("Bunkers", "lilbatl"), ("Simms At Night", "mltsimms"),
         ("Orleans", "orleans"), ("Thud Tower", "thudtowr"), ("Sanctuary", "town_2p"), ("Wilderness", "wilderns")]
+RANDOM_MAP = "__random__"        # "Random" at the top of the standard maps: one is picked when hosting starts
 GAMES = [("Survival Horde", "horde"), ("Normal bot game", "dm")]
 LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare"]
 PARCH, INK, RUST = "#f1e4c3", "#3b2a1a", "#b5530f"
@@ -1337,7 +1338,7 @@ class App(tk.Tk):
             self.map_modes = {k: m for _l, k, m in found}
             pairs = [(l, k) for l, k, m in found if ("M" in m if horde else any(c in m for c in "DMCK"))]
         else:
-            pairs = list(MAPS)
+            pairs = [("Random", RANDOM_MAP)] + list(MAPS)
         self.map_keys = dict(pairs)
         if not pairs:
             self.h_map.configure(values=[]); self.h_map.set("(no custom maps in your game folder)"); return
@@ -1350,7 +1351,8 @@ class App(tk.Tk):
         """Normal game: the Game mode list holds only the modes the chosen map has."""
         if not hasattr(self, "h_mode"): return
         key = self.map_keys.get(self.h_map.get())
-        letters = STD_MODES.get(key) or getattr(self, "map_modes", {}).get(key, "") or "D"
+        letters = ("".join(set("".join(STD_MODES.values()))) if key == RANDOM_MAP
+                   else STD_MODES.get(key) or getattr(self, "map_modes", {}).get(key, "") or "D")
         names = [n for n, c, _m in GAME_MODES if c in letters] or ["Deathmatch"]
         self.h_mode.configure(values=names)
         cur = self.h_mode.get() or self.cfg.get("h_mode", "Deathmatch")
@@ -1501,6 +1503,13 @@ class App(tk.Tk):
         map_key = self.map_keys.get(self.h_map.get())
         if not map_key:
             messagebox.showinfo(APP, "Pick a map first. (Custom maps are the ones in your Outlaws folder: a .lab and an .rcm file each.)"); return
+        if map_key == RANDOM_MAP:                         # a standard map that has the chosen game mode, not the last one picked
+            letter = "" if kind == "horde" else {n: c for n, c, _m in GAME_MODES}.get(self.h_mode.get(), "D")
+            maps = [(l, k) for l, k in MAPS if letter in STD_MODES.get(k, "")]
+            maps = [m for m in maps if m[1] != self.cfg.get("last_random_map")] or maps
+            label, map_key = random.choice(maps)
+            self.cfg["last_random_map"] = map_key
+            self.say("Random map: %s" % label)
         lim = {}
         if kind != "horde":
             for k, v, name in (("fraglimit", self.h_kills.get().strip(), "Kill limit"), ("timelimit", self.h_time.get().strip(), "Time limit")):
