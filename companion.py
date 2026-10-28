@@ -1391,6 +1391,37 @@ class App(tk.Tk):
             except OSError: pass
         return None
 
+    @staticmethod
+    def extract_toolkit(zip_path, tk_dir):
+        with zipfile.ZipFile(zip_path) as z:
+            for n in z.namelist():                           # scripts, plus zombie\ and sounds\ (the Horde's assets)
+                parts = n.replace("\\", "/").split("/")
+                if len(parts) > 2 or ".." in parts or not parts[-1] or (len(parts) == 2 and parts[0] not in ("zombie", "sounds")):
+                    continue
+                z.extract(n, tk_dir)
+
+    def toolkit_current(self):
+        """Before hosting: if GitHub has a newer hosting toolkit than this PC's, get it now, so nobody hosts an old one.
+        GitHub out of reach: host with the toolkit that's here. Not for the original toolkit (it is never replaced)."""
+        tk_dir = self.toolkit()
+        if os.path.exists(os.path.join(tk_dir, "BotLauncher.exe")) or os.path.isdir(os.path.join(tk_dir, "Companion-Launcher")):
+            return
+        try:
+            stamp, sha, size = self.gh("toolkit/version.txt", 15, root=True).read().decode().split()[:3]
+        except Exception:
+            self.note("toolkit check: GitHub out of reach, hosting with this PC's toolkit"); return
+        if self.cfg.get("toolkit_stamp") and stamp <= self.cfg["toolkit_stamp"]: return
+        self.say("A newer hosting toolkit is on GitHub: getting it before the game starts (%d MB)..." % (int(size) // 2**20))
+        try:
+            tmp = os.path.join(tempfile.mkdtemp(prefix="outlaws_comp_"), "t.zip")
+            with self.gh("toolkit/toolkit.zip", 600, root=True) as r, open(tmp, "wb") as out: shutil.copyfileobj(r, out)
+            if sha256(tmp) != sha.lower(): raise RuntimeError("the download was damaged")
+            self.extract_toolkit(tmp, tk_dir)
+            self.cfg["toolkit_stamp"] = stamp; save(self.cfg)
+            self.say("Hosting toolkit updated.")
+        except Exception as e:
+            self.say("Couldn't update the hosting toolkit (%s): hosting with this PC's copy." % e)
+
     def setup_work(self):
         try:
             tk_dir = self.toolkit()
@@ -1414,12 +1445,7 @@ class App(tk.Tk):
                 addr = self.choose_host(hosts) if hosts else None
                 if not addr: self.say("Nobody is hosting right now either. Try again in a while."); return
                 with self.fetch(addr, "/toolkit.zip", 300) as r, open(tmp, "wb") as out: shutil.copyfileobj(r, out)
-            with zipfile.ZipFile(tmp) as z:
-                for n in z.namelist():                           # scripts, plus zombie\ and sounds\ (the Horde's assets)
-                    parts = n.replace("\\", "/").split("/")
-                    if len(parts) > 2 or ".." in parts or not parts[-1] or (len(parts) == 2 and parts[0] not in ("zombie", "sounds")):
-                        continue
-                    z.extract(n, tk_dir)
+            self.extract_toolkit(tmp, tk_dir)
             if stamp: self.cfg["toolkit_stamp"] = stamp; save(self.cfg)
             self.say("Toolkit installed. Setting up Python (a few minutes the first time)...")
             py = self.python_cmd()
@@ -1505,6 +1531,7 @@ class App(tk.Tk):
             self.say("Hosting cancelled: this PC isn't on the games' ZeroTier network yet.")
             self.after(0, lambda: self.host_btn.configure(text="START HOSTING")); return
         self.after(0, lambda: self.addr_lbl.configure(text="Friends: open the Companion and press Join Game."))
+        self.toolkit_current()                         # never host an old toolkit
         tkd = self.toolkit(); py = os.path.join(tkd, ".venv", "Scripts", "python.exe")
         self.say("Starting the game server (this takes a minute)...")
         self.host_proc = p = subprocess.Popen([py, "-u", os.path.join(tkd, "companionhost.py"), jf], cwd=tkd, stdout=subprocess.PIPE,
