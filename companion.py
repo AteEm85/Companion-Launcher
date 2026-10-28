@@ -640,8 +640,9 @@ class App(tk.Tk):
             have = self.cfg.get("toolkit_stamp")
             if have and os.path.exists(os.path.join(self.toolkit(), "botctl.py")):
                 new = self.gh("toolkit/version.txt", 15, root=True).read().decode().split()[0]
-                if new > have:
-                    self.say("A newer hosting toolkit is on GitHub: press 'Refresh hosting toolkit' on the Host tab to get it.")
+                if new > have:                              # fetched by itself (only when this PC has hosted before)
+                    self.say("A newer hosting toolkit is on GitHub: getting it now...")
+                    self.after(0, self.auto_refresh_toolkit)
         except Exception:
             pass
         try:
@@ -1364,6 +1365,17 @@ class App(tk.Tk):
     def refresh_host(self):
         self.have_toolkit = os.path.exists(os.path.join(self.toolkit(), "botctl.py"))
         self.visibility()
+
+    def auto_refresh_toolkit(self, tries=0):
+        """The newer toolkit on GitHub, at start: waits while something else is busy, never while a game is hosted."""
+        if self.host_proc and self.host_proc.poll() is None: return
+        tk_dir = self.toolkit()
+        if os.path.exists(os.path.join(tk_dir, "BotLauncher.exe")) or os.path.isdir(os.path.join(tk_dir, "Companion-Launcher")):
+            return                                  # the original toolkit (it is never replaced)
+        if self.busy or not hasattr(self, "setup_btn"):
+            if tries < 60: self.after(5000, lambda: self.auto_refresh_toolkit(tries + 1))
+            return
+        self.setup_toolkit()
 
     def setup_toolkit(self):
         if self.busy: return
