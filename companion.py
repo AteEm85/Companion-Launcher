@@ -1092,14 +1092,33 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def banner_window(self):
+        """The big banner's window: full width, see-through, made once when the match starts and only drawn into after
+        that (opening a new window in the middle of the match makes the game let go of the keys you are holding:
+        you'd stop sprinting, or throw the TNT you were holding)."""
+        from tkinter import font as tkfont
+        KEY = "#010101"; w = self.overlay(KEY, 0.93, transparent=True)
+        sw, bh = w.winfo_screenwidth(), 110
+        cv = tk.Canvas(w, width=sw, height=bh, bg=KEY, highlightthickness=0); cv.pack()
+        w.geometry("%dx%d+0+%d" % (sw, bh, int(w.winfo_screenheight() * 0.08))); self.show_no_focus(w)
+        self._banner = (w, cv, tkfont.Font(family="Impact", size=34, weight="bold"), [None])
+        return self._banner
+
     def banner(self, text="Horde Becomes Stronger", secs=3.5):
         self.thunder()
-        w = self.overlay("#d9d2c3", 0.93)
-        tk.Label(w, text=text.upper(), font=("Impact", 34, "bold"), fg="#7a0a0a", bg="#d9d2c3", padx=36, pady=8).pack()
-        w.update_idletasks()
-        ww, wh = w.winfo_reqwidth(), w.winfo_reqheight()
-        w.geometry("%dx%d+%d+%d" % (ww, wh, (w.winfo_screenwidth() - ww) // 2, int(w.winfo_screenheight() * 0.08)))
-        self.show_no_focus(w); w.after(int(secs * 1000), w.destroy)
+        b = getattr(self, "_banner", None)
+        try:
+            if b is None or not b[0].winfo_exists(): b = self.banner_window()
+        except tk.TclError:
+            b = self.banner_window()
+        w, cv, font, clear = b
+        cv.delete("all")
+        sw, bg = w.winfo_screenwidth(), "#d9d2c3"
+        tw = font.measure(text.upper()) + 72; x0 = (sw - tw) // 2; y0, y1 = 18, 92
+        cv.create_rectangle(x0, y0, x0 + tw, y1, fill=bg, outline=bg)
+        cv.create_text(sw // 2, (y0 + y1) // 2, text=text.upper(), font=font, fill="#7a0a0a")
+        if clear[0]: w.after_cancel(clear[0])
+        clear[0] = w.after(int(secs * 1000), lambda: cv.delete("all"))
 
     def welcome(self):
         from tkinter import font as tkfont
@@ -1174,6 +1193,7 @@ class App(tk.Tk):
         if not game_running(): return
         time.sleep(2.5)                                          # let the map appear first
         self.after(0, self.welcome)
+        self.after(0, self.banner_window)                        # (made now, drawn into later: see banner_window)
         storming = [True]
         threading.Thread(target=self.storm_loop, args=(storming,), daemon=True).start()
         hud, shown, fails = [None], [None], 0
@@ -1198,6 +1218,12 @@ class App(tk.Tk):
         finally:
             storming[0] = False
             self.after(0, lambda: hud[0] and hud[0][0].destroy())
+            def _drop():
+                b = getattr(self, "_banner", None); self._banner = None
+                if b:
+                    try: b[0].destroy()
+                    except tk.TclError: pass
+            self.after(6000, _drop)                              # (after the last banner has had its time)
 
     def get_music(self, addr, entry):
         """The host's Horde music, kept in this app's folder (downloaded again only when the host's file changes)."""
@@ -1379,6 +1405,9 @@ class App(tk.Tk):
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
         self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Full screen")
         Txt(cv, 36, 432, "Your screen", F); self.put(self.h_screen, X, 432, F)
+        self.h_private = tk.BooleanVar(value=self.cfg.get("h_private", False))   # only you and the bots: nobody sees or joins it
+        self.private_tick = Txt(cv, X + 196, 432, "", F, font=("Segoe UI Symbol", 10))
+        self.private_tick.bind(lambda: (self.h_private.set(not self.h_private.get()), self.draw_ticks()))
         self.h_trim = tk.BooleanVar(value=self.cfg.get("h_trim", True))
         self.trim_tick = Txt(cv, 36, 466, "", F, font=("Segoe UI Symbol", 10))
         self.trim_tick.bind(lambda: (self.h_trim.set(not self.h_trim.get()), self.draw_ticks()))
@@ -1405,6 +1434,8 @@ class App(tk.Tk):
         for t, tick in self.kind_ticks.items():
             tick.configure(text=("◉ " if self.h_mapkind.get() == t else "○ ") + t)
         self.trim_tick.configure(text=("☑ " if self.h_trim.get() else "☐ ") + "Trim Idle Bot Memory (Lowers RAM Usage)")
+        if hasattr(self, "private_tick"):
+            self.private_tick.configure(text=("☑ " if self.h_private.get() else "☐ ") + "Private game")
 
     def map_choices(self):
         """Fill the Map list: the game's own maps, or the custom maps in your game folder. Only maps that have the
@@ -1675,7 +1706,9 @@ class App(tk.Tk):
                                        "With %d bots on a PC that isn't powerful, the game can slow down or crash. Keep the number low if unsure.\n\nHost anyway?" % self.h_bots.get()): return
         mode = "horde" if kind == "horde" else {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get(), "dm")
         cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": mode, "map": map_key,
-               "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
+               "count": self.h_bots.get(), "difficulty": self.h_level.get(),
+               "users": 1 if self.h_private.get() else self.h_users.get(),        # a private game: just you
+               "private": bool(self.h_private.get()),
                "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and self.h_hmode.get() == "Melee Zombies",
                "tnt_only": kind != "horde" and self.h_mode.get() == TNT_ONLY,
                **lim}
@@ -1683,7 +1716,7 @@ class App(tk.Tk):
             red, blue = self.bot_split()
             cfg["red_bots"] = red                                       # the rest are blue; everyone picks their own team in the lobby
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_private=bool(self.h_private.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP"); self.hosting = True
@@ -1694,7 +1727,8 @@ class App(tk.Tk):
             self.say("Hosting cancelled: this PC isn't on the games' ZeroTier network yet."); self.hosting = False
             self.after(0, lambda: self.host_btn.configure(text="START HOSTING")); return
         if getattr(self, "host_cancel", False): return     # STOP was pressed while ZeroTier was checked
-        self.after(0, lambda: self.addr_lbl.configure(text="Friends: open the Companion and press Join Game."))
+        self.after(0, lambda: self.addr_lbl.configure(text="Private game: only you and the bots." if self.cfg.get("h_private")
+                                                      else "Friends: open the Companion and press Join Game."))
         self.toolkit_current()                         # never host an old toolkit
         if getattr(self, "host_cancel", False): return
         tkd = self.toolkit(); py = os.path.join(tkd, ".venv", "Scripts", "python.exe")
