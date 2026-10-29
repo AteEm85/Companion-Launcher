@@ -76,6 +76,7 @@ GAMES = [("Survival Horde", "horde"), ("Normal bot game", "dm")]
 LEVELS = ["Easiest", "Easy", "Normal", "Hard", "Nightmare", "Hell"]   # the toolkit's lv_easiest .. lv_hell
 PARCH, INK, RUST = "#f1e4c3", "#3b2a1a", "#b5530f"
 WIN_W, WIN_H = 580, 824
+ZOOM_MIN = 0.7                    # the window can be shrunk to this much of its size (and grown as big as the screen)
 PANEL_END = 636
 CLOSE_W = 160
 DARK, TXT, DIM, GOLD, WARN, EDGE = "#120b07", "#f6ead0", "#cdb994", "#f2b24a", "#ff9e6e", "#7a5a32"   # on the dark picture
@@ -353,7 +354,7 @@ class App(tk.Tk):
         self.title(APP); self.configure(bg=DARK)
         self.cfg = load(); self.busy = False; self.host_proc = None; self.session = False
         # The window can be resized and maximized: everything is drawn for WIN_W x WIN_H and zoomed to fit (rezoom).
-        self.resizable(True, True); self.minsize(WIN_W, WIN_H)
+        self.resizable(True, True); self.minsize(int(WIN_W * ZOOM_MIN), int(WIN_H * ZOOM_MIN))
         g = self.cfg.get("win_geom") or ""
         self.geometry(g if re.match(r"^\d+x\d+(\+-?\d+\+-?\d+)?$", g) else "%dx%d" % (WIN_W, WIN_H))
         if self.cfg.get("win_zoomed"):
@@ -449,7 +450,7 @@ class App(tk.Tk):
         from tkinter import font as tkfont
         cv = self.cv
         W, H = max(1, cv.winfo_width()), max(1, cv.winfo_height())
-        s = max(1.0, min(W / WIN_W, H / WIN_H))                     # (never smaller than it was made)
+        s = max(ZOOM_MIN, min(W / WIN_W, H / WIN_H))
         ox, oy = (W - WIN_W * s) / 2, (H - WIN_H * s) / 2
         s0, ox0, oy0 = self._zf
         if abs(s - s0) < 0.01 and abs(ox - ox0) < 1 and abs(oy - oy0) < 1: return
@@ -475,7 +476,7 @@ class App(tk.Tk):
         base, styles, named, logf = self._zoom_base
         cv.move("all", -ox0, -oy0); cv.scale("all", 0, 0, s / s0, s / s0); cv.move("all", ox, oy)
         self._zf = (s, ox, oy)
-        size = lambda n: max(6, int(round(abs(n) * s))) * (-1 if n < 0 else 1)
+        size = lambda n: max(5, int(round(abs(n) * s))) * (-1 if n < 0 else 1)
         for i, b in base.items():
             try:
                 if b[0] == "text":
@@ -491,6 +492,10 @@ class App(tk.Tk):
         st = ttk.Style(self)
         for n, f in styles.items():
             st.configure(n, font=(f["family"], size(f["size"]), f["weight"]))
+        px = lambda n: max(1, int(round(n * s)))                    # the widgets' own padding and arrows too, so a
+        st.configure("TButton", padding=px(6)); st.configure("Big.TButton", padding=px(10))   # small window still fits
+        for w in ("TCombobox", "TSpinbox"):
+            st.configure(w, arrowsize=px(15))
         for n, f in named.items():
             tkfont.nametofont(n).configure(size=size(f["size"]))
         self.log_box.configure(font=(logf["family"], size(logf["size"]), logf["weight"]))
