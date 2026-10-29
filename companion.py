@@ -27,7 +27,7 @@ ALLOWED_EXT = (".spx", ".wav", ".lab", ".rcm", ".obt", ".obb")      # .wav: the 
 CHARS = ["Sanchez", "James Anderson", "Two Feathers", "Dr Death", "Bob", "Mary"]
 # (flags, v_windowmode). Exclusive full screen gives no size, so the game keeps its own resolution (yours, if you
 # changed it in the game's settings); Full screen and Borderless window run at the desktop's resolution.
-SCREENS = {"Exclusive full screen": (["-fullscreen"], "2"),
+SCREENS = {"Exclusive full screen": ([], "3"),       # the game: 0 Windowed, 1 Borderless, 2 Fullscreen, 3 Exclusive
            "Full screen": (["-fullscreen"], "2"),
            "Borderless window": ([], "1"),
            "Window": (["-window", "-width", "1280", "-height", "720"], "0")}
