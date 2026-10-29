@@ -185,8 +185,10 @@ STD_MODES = {"civpow2": "DCKM", "drygulch": "CKMD", "fort": "CKMD", "granary": "
              "mltsimms": "CKMD", "orleans": "CKMD", "thudtowr": "DM", "town_2p": "DKCTM", "wilderns": "CKMD"}   # Sanctuary: Team Play is added for the game (companionhost.py)
 GAME_MODES = [("Deathmatch", "D", "dm"), ("Team deathmatch", "M", "team"), ("Capture the flag", "C", "ctf"),
               ("Chicken (KFC)", "K", "chicken"),
-              ("TNT Only Deathmatch", "D", "dm")]      # (shown, .rcm letter, botctl --mode); TNT only: every bot Sanchez, TNT then knife or fists
+              ("TNT Only Deathmatch", "D", "dm"),      # (shown, .rcm letter, botctl --mode); TNT only: every bot Sanchez, TNT then knife or fists
+              ("Melee Only Deathmatch", "D", "dm")]    # Melee only: the bots are Mary (mostly fists) and the chief (the knife), no guns or TNT
 TNT_ONLY = "TNT Only Deathmatch"
+MELEE_ONLY = "Melee Only Deathmatch"
 
 def custom_maps(game, toolkit=None):
     """[(label, key, modes)] for the custom maps in the game folder: every <key>.rcm with its <key>.lab beside it.
@@ -1711,6 +1713,7 @@ class App(tk.Tk):
                "private": bool(self.h_private.get()),
                "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and self.h_hmode.get() == "Melee Zombies",
                "tnt_only": kind != "horde" and self.h_mode.get() == TNT_ONLY,
+               "melee_only": kind != "horde" and self.h_mode.get() == MELEE_ONLY,
                **lim}
         if kind != "horde" and self.team_game():
             red, blue = self.bot_split()
