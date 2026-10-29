@@ -184,7 +184,9 @@ STANDARD_KEYS = {k.lower() for _, k in MAPS}
 STD_MODES = {"civpow2": "DCKM", "drygulch": "CKMD", "fort": "CKMD", "granary": "CKMD", "hargrove": "DCKM", "lilbatl": "DKM",
              "mltsimms": "CKMD", "orleans": "CKMD", "thudtowr": "DM", "town_2p": "DKCTM", "wilderns": "CKMD"}   # Sanctuary: Team Play is added for the game (companionhost.py)
 GAME_MODES = [("Deathmatch", "D", "dm"), ("Team deathmatch", "M", "team"), ("Capture the flag", "C", "ctf"),
-              ("Chicken (KFC)", "K", "chicken")]       # (shown, .rcm letter, botctl --mode)
+              ("Chicken (KFC)", "K", "chicken"),
+              ("TNT Only Deathmatch", "D", "dm")]      # (shown, .rcm letter, botctl --mode); TNT only: every bot Sanchez, TNT then knife or fists
+TNT_ONLY = "TNT Only Deathmatch"
 
 def custom_maps(game, toolkit=None):
     """[(label, key, modes)] for the custom maps in the game folder: every <key>.rcm with its <key>.lab beside it.
@@ -821,12 +823,30 @@ class App(tk.Tk):
             "In a Survival Horde game you are put on the Survivors team for you."), T, fill=DIM, width=WIN_W - 72, anchor="nw")
 
     def join(self):
+        if getattr(self, "joining", False): self.stop_join(); return
         if self.busy: return
         if game_running():
             messagebox.showinfo(APP, "Outlaws is already running. Close it first."); return
         self.cfg.update(char=self.char.get(), screen=self.screen.get()); save(self.cfg)
-        self.busy = True; self.join_btn.configure(text="Working...", state="disabled")
+        self.busy = True; self.joining = True; self.join_stop = False; self.join_game = None
+        self.join_btn.configure(text="STOP", state="normal")
         threading.Thread(target=self.join_work, daemon=True).start()
+
+    def stop_join(self):
+        """The Join button while joining (STOP): stop where it is. A game already started is closed (your game folder is
+        then put back as it was); a join still finding the host or getting mods stops at the next step."""
+        self.join_stop = True
+        self.join_btn.configure(text="Stopping...", state="disabled")
+        self.say("Stopping...")
+        g = getattr(self, "join_game", None)
+        try:
+            if g and g.poll() is None:
+                subprocess.run(["taskkill", "/PID", str(g.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+        except OSError: pass
+
+    def stopped(self):
+        """True once STOP was pressed on a join."""
+        return bool(getattr(self, "join_stop", False))
 
     def ask(self, kind, title, msg):
         """A message box from a worker thread."""
@@ -862,7 +882,7 @@ class App(tk.Tk):
             if not self.ensure_zerotier():
                 self.say("Joining cancelled: this PC isn't on the games' ZeroTier network yet."); return
             addr = self.find_host()
-            if addr is False: self.say("Joining cancelled."); return
+            if addr is False or self.stopped(): self.say("Joining cancelled."); return
             if not addr:
                 self.say("No hosted game found, so no mods were installed. Opening the game anyway: use LAN > Join Game.")
             game = self.game_dir(); items = []; archived = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""; self.music_path = None; man = None
@@ -900,6 +920,7 @@ class App(tk.Tk):
                     if new: self.say("Downloading %s (%d file(s))..." % (mod["title"], new))
                     cached = 0
                     for fl in todo:
+                        if self.stopped(): raise RuntimeError("you pressed Stop")
                         p = self.cached_mod(fl["sha256"])
                         if p: cached += 1
                         else:
@@ -927,7 +948,10 @@ class App(tk.Tk):
                 zombies = any(m.get("id") == "zombie_skins" for m in man.get("mods", [])) if man else False
                 self.look_on(game, zombies, dark="flash" if mode == "dark" else True)
             cmd = game_cmd(game, self.screen.get(), self.char.get(), addr, horde=bool(addr) and mode in ("horde", "dark"))
-            try: me = subprocess.Popen(cmd, cwd=game)
+            if self.stopped():
+                if self.session or journal_read(): restore_files()
+                self.look_off(); self.session = False; self.say("Joining cancelled."); return
+            try: me = subprocess.Popen(cmd, cwd=game); self.join_game = me
             except OSError as e:
                 self.say("Could not start the game: %s" % e); restore_files(); self.session = False; return
             threading.Thread(target=self.check_game_folder, args=(game,), daemon=True).start()
@@ -944,6 +968,7 @@ class App(tk.Tk):
             shutil.rmtree(tmp, ignore_errors=True)
         finally:
             self.busy = False
+            self.joining = False; self.join_stop = False; self.join_game = None
             self.after(0, lambda: self.join_btn.configure(text="JOIN GAME", state="normal"))
 
     def cached_mod(self, sha):
@@ -1333,9 +1358,9 @@ class App(tk.Tk):
         Txt(cv, 36, 330, "Game mode", N); self.put(self.h_mode, X, 330, N)
         Txt(cv, 36, 364, "Limits (blank = no limit)", N)
         self.put(ttk.Spinbox(self, from_=1, to=200, width=6, textvariable=self.h_kills), X, 364, N)
-        Txt(cv, X + 66, 364, "kills", N, fill=DIM, font=("Segoe UI", 9))
-        self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X + 120, 364, N)
-        Txt(cv, X + 186, 364, "minutes", N, fill=DIM, font=("Segoe UI", 9))
+        Txt(cv, X + 66, 364, "kills/captures", N, fill=DIM, font=("Segoe UI", 9))     # Capture the flag: captures to win
+        self.put(ttk.Spinbox(self, from_=1, to=120, width=6, textvariable=self.h_time), X + 160, 364, N)
+        Txt(cv, X + 226, 364, "minutes", N, fill=DIM, font=("Segoe UI", 9))
         # Team games: how many of the bots play Red, the rest play Blue (each box fills the other in from "# of Bots").
         total = max(1, int(self.cfg.get("h_bots", 3) or 3))
         self.h_red = tk.StringVar(value=str(min(total, int(self.cfg.get("h_red", (total + 1) // 2)))))
@@ -1348,8 +1373,7 @@ class App(tk.Tk):
         self.h_red.trace_add("write", lambda *a: self.split_bots("red"))
         self.h_blue.trace_add("write", lambda *a: self.split_bots("blue"))
         self.h_bots.trace_add("write", lambda *a: self.split_bots("total"))
-        self.h_mode.bind("<<ComboboxSelected>>", lambda e: self.botteam_state())
-        self.h_map.bind("<<ComboboxSelected>>", lambda e: self.mode_choices())
+        self.h_mode.bind("<<ComboboxSelected>>", lambda e: self.map_choices())      # the maps that have this mode
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
         self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Full screen")
         Txt(cv, 36, 432, "Your screen", F); self.put(self.h_screen, X, 432, F)
@@ -1385,31 +1409,35 @@ class App(tk.Tk):
         chosen game's mode are offered (Survival Horde needs team deathmatch; Sanctuary is made to work for it)."""
         horde = dict(GAMES).get(self.h_game.get()) == "horde"
         self.draw_ticks()
+        self.mode_choices()
+        letter = "M" if horde else self.mode_letter()                # a normal game: only maps that have its mode
         if self.h_mapkind.get() == "Custom":
             found = custom_maps(self.game_dir(), self.toolkit())
             self.map_modes = {k: m for _l, k, m in found}
-            pairs = [(l, k) for l, k, m in found if ("M" in m if horde else any(c in m for c in "DMCK"))]
+            pairs = [(l, k) for l, k, m in found if letter in m]
         else:
-            pairs = [("Random", RANDOM_MAP)] + list(MAPS)
+            pairs = [("Random", RANDOM_MAP)] + [(l, k) for l, k in MAPS if horde or letter in STD_MODES.get(k, "")]
         self.map_keys = dict(pairs)
         if not pairs:
-            self.h_map.configure(values=[]); self.h_map.set("(no custom maps in your game folder)"); return
+            self.h_map.configure(values=[]); self.h_map.set("(no custom maps with this game mode in your game folder)"); return
         names = [l for l, _ in pairs]; self.h_map.configure(values=names)
-        want = self.cfg.get("h_map", "Dry Gulch")
+        cur = self.h_map.get()
+        want = cur if cur in names else self.cfg.get("h_map", "Dry Gulch")
         self.h_map.set(want if want in names else names[0])
-        self.mode_choices()
 
     def mode_choices(self):
-        """Normal game: the Game mode list holds only the modes the chosen map has."""
+        """Normal game: every game mode is offered; the Map list then holds only the maps that have the chosen one
+        (Bunkers has no Capture the flag, so it isn't offered for it)."""
         if not hasattr(self, "h_mode"): return
-        key = self.map_keys.get(self.h_map.get())
-        letters = ("".join(set("".join(STD_MODES.values()))) if key == RANDOM_MAP
-                   else STD_MODES.get(key) or getattr(self, "map_modes", {}).get(key, "") or "D")
-        names = [n for n, c, _m in GAME_MODES if c in letters] or ["Deathmatch"]
+        names = [n for n, _c, _m in GAME_MODES]
         self.h_mode.configure(values=names)
         cur = self.h_mode.get() or self.cfg.get("h_mode", "Deathmatch")
         self.h_mode.set(cur if cur in names else names[0])
         self.botteam_state()
+
+    def mode_letter(self):
+        """The chosen normal game's mode, as the .rcm letter (D deathmatch, M team deathmatch, C capture the flag ...)."""
+        return {n: c for n, c, _m in GAME_MODES}.get(self.h_mode.get() if hasattr(self, "h_mode") else "", "D")
 
     def team_game(self):
         """The chosen normal game is one with red and blue teams (Team deathmatch, Capture the flag)."""
@@ -1626,7 +1654,7 @@ class App(tk.Tk):
             self.say("Random map: %s" % label)
         lim = {}
         if kind != "horde":
-            for k, v, name in (("fraglimit", self.h_kills.get().strip(), "Kill limit"), ("timelimit", self.h_time.get().strip(), "Time limit")):
+            for k, v, name in (("fraglimit", self.h_kills.get().strip(), "Kill/capture limit"), ("timelimit", self.h_time.get().strip(), "Time limit")):
                 if not v: continue
                 if not v.isdigit() or int(v) < 1:
                     messagebox.showinfo(APP, "%s must be a whole number (or blank)." % name); return
@@ -1642,6 +1670,7 @@ class App(tk.Tk):
         cfg = {"kind": "horde" if kind == "horde" else "bots", "mode": mode, "map": map_key,
                "count": self.h_bots.get(), "difficulty": self.h_level.get(), "users": self.h_users.get(),
                "horde": {"Challenge": "challenge", "Dark Mode": "dark"}.get(self.h_hmode.get(), "normal"), "player": "Player", "trim": bool(self.h_trim.get()), "melee": kind == "horde" and self.h_hmode.get() == "Melee Zombies",
+               "tnt_only": kind != "horde" and self.h_mode.get() == TNT_ONLY,
                **lim}
         if kind != "horde" and self.team_game():
             red, blue = self.bot_split()
@@ -1650,7 +1679,7 @@ class App(tk.Tk):
                         h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
-        self.host_btn.configure(text="STOP HOSTING")
+        self.host_btn.configure(text="STOP")
         threading.Thread(target=self.host_work, args=(jf, True, kind), daemon=True).start()
 
     def host_work(self, jf, play, kind):
