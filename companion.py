@@ -17,6 +17,7 @@ BRANCH = "main"
 RAW = "https://raw.githubusercontent.com/%s/%s/companion/" % (REPO, BRANCH)
 PORT = 8765
 DISCOVER_PORT = 8766                     # UDP: hosts answer a broadcast with their name, mode and map
+PY_URL = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"   # installed for the user when hosting needs it
 ZT_NET = "b6079f73c6535907"            # the games' ZeroTier network
 ZT_SERVICE = "ZeroTierOneService"
 ZT_MSI = "https://download.zerotier.com/dist/ZeroTier%20One.msi"
@@ -36,13 +37,36 @@ def game_cmd(game, screen, char=None, join=None, horde=False):
     lightning) can be drawn over a game in exclusive full screen."""
     if horde and screen == "Full screen": screen = "Borderless window"
     flags, winmode = SCREENS.get(screen, ([], None))
+    size = (1280, 720) if screen == "Window" else desktop_size() if screen in SCREENS else None
     cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies"] + flags
     if join: cmd += ["-join", join]
     setvars = []
     if winmode is not None: setvars += ["v_windowmode", winmode]
+    if size: setvars += ["v_width", str(size[0]), "v_height", str(size[1])]    # the game keeps the last size it ran at
+    # (a "Window" game saves 1280 x 720), and a borderless window that size is just a window: so always say the size
     if char in CHARS: setvars += ["mp_defaultChar", str(CHARS.index(char) + 1)]
     if horde: setvars += ["r_rhirenderfamily", "vulkan"]
     return cmd + (["-setvar"] + setvars if setvars else [])
+def desktop_size():
+    """The main screen's real resolution in pixels (not scaled by Windows' display scaling), or None."""
+    try:
+        import ctypes
+        class DEVMODE(ctypes.Structure):
+            _fields_ = [("dmDeviceName", ctypes.c_wchar * 32), ("dmSpecVersion", ctypes.c_ushort), ("dmDriverVersion", ctypes.c_ushort),
+                        ("dmSize", ctypes.c_ushort), ("dmDriverExtra", ctypes.c_ushort), ("dmFields", ctypes.c_ulong),
+                        ("dmPositionX", ctypes.c_long), ("dmPositionY", ctypes.c_long), ("dmDisplayOrientation", ctypes.c_ulong),
+                        ("dmDisplayFixedOutput", ctypes.c_ulong), ("dmColor", ctypes.c_short), ("dmDuplex", ctypes.c_short),
+                        ("dmYResolution", ctypes.c_short), ("dmTTOption", ctypes.c_short), ("dmCollate", ctypes.c_short),
+                        ("dmFormName", ctypes.c_wchar * 32), ("dmLogPixels", ctypes.c_ushort), ("dmBitsPerPel", ctypes.c_ulong),
+                        ("dmPelsWidth", ctypes.c_ulong), ("dmPelsHeight", ctypes.c_ulong), ("dmDisplayFlags", ctypes.c_ulong),
+                        ("dmDisplayFrequency", ctypes.c_ulong)]
+        dm = DEVMODE(); dm.dmSize = ctypes.sizeof(DEVMODE)
+        if ctypes.windll.user32.EnumDisplaySettingsW(None, -1, ctypes.byref(dm)) and dm.dmPelsWidth >= 640:   # -1: current mode
+            return int(dm.dmPelsWidth), int(dm.dmPelsHeight)
+    except Exception:
+        pass
+    return None
+
 MAPS = [("Buckshotville", "civpow2"), ("Dry Gulch", "drygulch"), ("The Fort", "fort"), ("The Granary", "granary"),
         ("Hargrove's Pattern Repair", "hargrove"), ("Bunkers", "lilbatl"), ("Simms At Night", "mltsimms"),
         ("Orleans", "orleans"), ("Thud Tower", "thudtowr"), ("Sanctuary", "town_2p"), ("Wilderness", "wilderns")]
@@ -1272,7 +1296,7 @@ class App(tk.Tk):
         cv = self.cv; S, F = ("host_setup",), ("host_form",)
         Txt(cv, 36, 128, (
             "Hosting needs the bot toolkit: a one-time download of about 35 MB from GitHub (the bots, zombie skins, "
-            "death sounds and music), plus Python 3 on this PC."), S, width=WIN_W - 72, anchor="nw")
+            "death sounds and music), plus Python 3, which it installs for you if this PC doesn't have it."), S, width=WIN_W - 72, anchor="nw")
         self.setup_btn = ttk.Button(self, text="Set up hosting", style="Big.TButton", command=self.setup_toolkit)
         self.put(self.setup_btn, 36, 210, S, width=WIN_W - 72 - CLOSE_W - 10)
         self.close_btns.append(ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all))
@@ -1449,11 +1473,36 @@ class App(tk.Tk):
         threading.Thread(target=self.setup_work, daemon=True).start()
 
     def python_cmd(self):
-        for c in (["py", "-3"], ["python"]):
+        local = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python")
+        found = sorted((os.path.join(local, d, "python.exe") for d in (os.listdir(local) if os.path.isdir(local) else [])
+                        if d.lower().startswith("python3")), reverse=True)            # a fresh install isn't on PATH yet
+        for c in [["py", "-3"], ["python"]] + [[p] for p in found if os.path.exists(p)]:
             try:
                 if subprocess.run(c + ["-c", "import venv,tkinter"], capture_output=True, creationflags=NO_WINDOW).returncode == 0: return c
             except OSError: pass
         return None
+
+    def install_python(self):
+        """Python 3.12 from python.org, installed for this Windows user only (no admin prompt, nothing else changed).
+        Checked first: the installer must carry a valid Python Software Foundation signature. Returns python_cmd()."""
+        arm = "ARM64" in (os.environ.get("PROCESSOR_ARCHITEW6432", "") + os.environ.get("PROCESSOR_ARCHITECTURE", "")).upper()
+        url = PY_URL.replace("-amd64.exe", "-arm64.exe") if arm else PY_URL
+        exe = os.path.join(tempfile.mkdtemp(prefix="outlaws_comp_"), url.rsplit("/", 1)[1])
+        self.say("Python 3 isn't on this PC: downloading it from python.org (about 25 MB)...")
+        with urllib.request.urlopen(url, timeout=600) as r, open(exe, "wb") as out: shutil.copyfileobj(r, out)
+        ps = ("$s = Get-AuthenticodeSignature -LiteralPath '%s'; if ($s.Status -eq 'Valid' -and "
+              "$s.SignerCertificate.Subject -match 'Python Software Foundation') { exit 0 } else { exit 1 }" % exe.replace("'", "''"))
+        if subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                          creationflags=NO_WINDOW).returncode != 0:
+            raise RuntimeError("the Python download isn't signed by the Python Software Foundation")
+        self.say("Installing Python 3.12 for your Windows user (a minute or two, no admin needed)...")
+        r = subprocess.run([exe, "/quiet", "InstallAllUsers=0", "Include_launcher=1", "InstallLauncherAllUsers=0",
+                            "Include_tcltk=1", "Include_pip=1", "Include_test=0", "Include_doc=0", "PrependPath=1",
+                            "Shortcuts=0", "AssociateFiles=0"], creationflags=NO_WINDOW)
+        shutil.rmtree(os.path.dirname(exe), ignore_errors=True)
+        if r.returncode not in (0, 3010):
+            raise RuntimeError("the Python installer stopped (code %d)" % r.returncode)
+        return self.python_cmd()
 
     @staticmethod
     def extract_toolkit(zip_path, tk_dir):
@@ -1514,7 +1563,10 @@ class App(tk.Tk):
             self.say("Toolkit installed. Setting up Python (a few minutes the first time)...")
             py = self.python_cmd()
             if not py:
-                self.say("Python 3 (with tkinter) was not found. Opening python.org: install it, then press Set up hosting again.")
+                try: py = self.install_python()
+                except Exception as e: self.say("Couldn't install Python by itself (%s)." % e)
+            if not py:
+                self.say("Python 3 (with tkinter) is still missing. Opening python.org: install it, then press Set up hosting again.")
                 webbrowser.open("https://www.python.org/downloads/"); return
             venv = os.path.join(tk_dir, ".venv")
             if not os.path.exists(os.path.join(venv, "Scripts", "python.exe")):
