@@ -424,6 +424,7 @@ class App(tk.Tk):
         show("host_form", self.tab == "host" and self.have_toolkit)
         show("hmode", self.tab == "host" and self.have_toolkit and horde)
         show("normal", self.tab == "host" and self.have_toolkit and not horde)
+        show("teamsplit", self.tab == "host" and self.have_toolkit and not horde and self.team_game())   # Red/Blue bots: team games only
 
     def put(self, widget, x, y, tags, **kw):
         """A widget on the background, at x, y (its left middle)."""
@@ -1367,8 +1368,9 @@ class App(tk.Tk):
         self.h_blue = tk.StringVar(value=str(total - int(self.h_red.get())))
         self.red_spin = ttk.Spinbox(self, from_=0, to=7, width=6, textvariable=self.h_red)
         self.blue_spin = ttk.Spinbox(self, from_=0, to=7, width=6, textvariable=self.h_blue)
-        Txt(cv, 36, 398, "Bots on Red", N); self.put(self.red_spin, X, 398, N)
-        Txt(cv, X + 82, 398, "Bots on Blue", N); self.put(self.blue_spin, X + 190, 398, N)
+        TS = N + ("teamsplit",)                                   # shown only for team games (visibility)
+        Txt(cv, 36, 398, "Bots on Red", TS); self.put(self.red_spin, X, 398, TS)
+        Txt(cv, X + 82, 398, "Bots on Blue", TS); self.put(self.blue_spin, X + 190, 398, TS)
         self._split_busy = False
         self.h_red.trace_add("write", lambda *a: self.split_bots("red"))
         self.h_blue.trace_add("write", lambda *a: self.split_bots("blue"))
@@ -1441,11 +1443,13 @@ class App(tk.Tk):
 
     def team_game(self):
         """The chosen normal game is one with red and blue teams (Team deathmatch, Capture the flag)."""
+        if not hasattr(self, "h_mode"): return False
         return {n: m for n, _c, m in GAME_MODES}.get(self.h_mode.get()) in ("team", "ctf")
 
     def botteam_state(self):
         for w in (getattr(self, "red_spin", None), getattr(self, "blue_spin", None)):
             if w is not None: w.state(["!disabled"] if self.team_game() else ["disabled"])
+        if hasattr(self, "tab"): self.visibility()           # the Bots on Red / Blue row: team games only
 
     def split_bots(self, changed):
         """Keep Bots on Red + Bots on Blue = # of Bots: the box you didn't touch fills itself in."""
