@@ -25,19 +25,30 @@ ZT_CLI = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x8
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 ALLOWED_EXT = (".spx", ".wav", ".lab", ".rcm", ".obt", ".obb")      # .wav: the zombie death sounds
 CHARS = ["Sanchez", "James Anderson", "Two Feathers", "Dr Death", "Bob", "Mary"]
-SCREENS = {"Window": (["-window", "-width", "1280", "-height", "720"], "0"),        # (flags, v_windowmode)
+# (flags, v_windowmode). Exclusive full screen gives no size, so the game keeps its own resolution (yours, if you
+# changed it in the game's settings); Full screen and Borderless window run at the desktop's resolution.
+SCREENS = {"Exclusive full screen": (["-fullscreen"], "2"),
+           "Full screen": (["-fullscreen"], "2"),
            "Borderless window": ([], "1"),
-           "Full screen": (["-fullscreen"], "2")}
+           "Window": (["-window", "-width", "1280", "-height", "720"], "0")}
+SCREEN_DEFAULT = "Exclusive full screen"
+
+def saved_screen(cfg, key):
+    """The screen saved under key, or the default. "Full screen" saved before Exclusive full screen existed was only
+    the old default, so it becomes the new default once (screen_v2 marks the settings as already moved on)."""
+    v = cfg.get(key)
+    if v not in SCREENS or (v == "Full screen" and not cfg.get("screen_v2")): return SCREEN_DEFAULT
+    return v
 
 def game_cmd(game, screen, char=None, join=None, horde=False):
     """The command line for your own game. The game reads ONE -setvar block (name value name value ...): a second
     -setvar is ignored, which is how the character got lost before. So every setting goes in a single block, last.
     horde=True: the Survival look only exists in the Vulkan shaders (the game rejects edited Direct3D ones), so the game
-    runs on Vulkan; and "Full screen" becomes borderless full screen, because nothing (the banner, the tier label, the
+    runs on Vulkan; and "Full screen" / "Exclusive full screen" become borderless full screen, because nothing (the banner, the tier label, the
     lightning) can be drawn over a game in exclusive full screen."""
-    if horde and screen == "Full screen": screen = "Borderless window"
+    if horde and screen in ("Full screen", "Exclusive full screen"): screen = "Borderless window"
     flags, winmode = SCREENS.get(screen, ([], None))
-    size = (1280, 720) if screen == "Window" else desktop_size() if screen in SCREENS else None
+    size = (1280, 720) if screen == "Window" else None if screen == "Exclusive full screen" else desktop_size() if screen in SCREENS else None
     cmd = [os.path.join(game, "OutlawsAHOM.exe"), "-netdriver", "lan", "-skipintromovies"] + flags
     if join: cmd += ["-join", join]
     setvars = []
@@ -927,7 +938,7 @@ class App(tk.Tk):
         self.char.set(self.cfg.get("char", "(pick in game)")); self.put(self.char, 210, 140, T)
         Txt(cv, 36, 178, "Screen", T)
         self.screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=22)
-        self.screen.set(self.cfg.get("screen") if self.cfg.get("screen") in SCREENS else "Full screen"); self.put(self.screen, 210, 178, T)
+        self.screen.set(saved_screen(self.cfg, "screen")); self.put(self.screen, 210, 178, T)
         self.join_btn = ttk.Button(self, text="JOIN GAME", style="Big.TButton", command=self.join)
         self.put(self.join_btn, 36, 238, T, width=WIN_W - 72 - CLOSE_W - 10)
         self.close_btns = [ttk.Button(self, text="Close All Windows", style="Close.TButton", command=self.close_all)]
@@ -942,7 +953,7 @@ class App(tk.Tk):
         if self.busy: return
         if game_running():
             messagebox.showinfo(APP, "Outlaws is already running. Close it first."); return
-        self.cfg.update(char=self.char.get(), screen=self.screen.get()); save(self.cfg)
+        self.cfg.update(char=self.char.get(), screen=self.screen.get(), screen_v2=True); save(self.cfg)
         self.busy = True; self.joining = True; self.join_stop = False; self.join_game = None
         self.join_btn.configure(text="STOP", state="normal")
         threading.Thread(target=self.join_work, daemon=True).start()
@@ -1517,7 +1528,7 @@ class App(tk.Tk):
         self.h_bots.trace_add("write", lambda *a: self.split_bots("total"))
         self.h_mode.bind("<<ComboboxSelected>>", lambda e: self.map_choices())      # the maps that have this mode
         self.h_screen = ttk.Combobox(self, values=list(SCREENS), state="readonly", width=24)     # your own game's window
-        self.h_screen.set(self.cfg.get("h_screen") if self.cfg.get("h_screen") in SCREENS else "Full screen")
+        self.h_screen.set(saved_screen(self.cfg, "h_screen"))
         Txt(cv, 36, 432, "Your screen", F); self.put(self.h_screen, X, 432, F)
         self.h_private = tk.BooleanVar(value=self.cfg.get("h_private", False))   # only you and the bots: nobody sees or joins it
         self.private_tick = Txt(cv, X + 196, 432, "", F, font=("Segoe UI Symbol", 10))
@@ -1831,7 +1842,7 @@ class App(tk.Tk):
             red, blue = self.bot_split()
             cfg["red_bots"] = red                                       # the rest are blue; everyone picks their own team in the lobby
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_private=bool(self.h_private.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), screen_v2=True, h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_private=bool(self.h_private.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP"); self.hosting = True
