@@ -1639,7 +1639,10 @@ class App(tk.Tk):
         return ans[0]
 
     def host_toggle(self):
-        if self.host_proc and self.host_proc.poll() is None: self.stop_host(); return
+        # STOP: stop the hosting, never start it again. (While ZeroTier is being checked there's no host program yet,
+        # which used to send STOP down the start path, with the RAM/CPU warning.)
+        if (self.host_proc and self.host_proc.poll() is None) or getattr(self, "hosting", False): self.stop_host(); return
+        self.host_cancel = False
         if game_running(): messagebox.showinfo(APP, "Close Outlaws first (hosting restarts the game copies)."); return
         kind = dict(GAMES)[self.h_game.get()]
         map_key = self.map_keys.get(self.h_map.get())
@@ -1679,15 +1682,17 @@ class App(tk.Tk):
                         h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
-        self.host_btn.configure(text="STOP")
+        self.host_btn.configure(text="STOP"); self.hosting = True
         threading.Thread(target=self.host_work, args=(jf, True, kind), daemon=True).start()
 
     def host_work(self, jf, play, kind):
         if not self.ensure_zerotier():
-            self.say("Hosting cancelled: this PC isn't on the games' ZeroTier network yet.")
+            self.say("Hosting cancelled: this PC isn't on the games' ZeroTier network yet."); self.hosting = False
             self.after(0, lambda: self.host_btn.configure(text="START HOSTING")); return
+        if getattr(self, "host_cancel", False): return     # STOP was pressed while ZeroTier was checked
         self.after(0, lambda: self.addr_lbl.configure(text="Friends: open the Companion and press Join Game."))
         self.toolkit_current()                         # never host an old toolkit
+        if getattr(self, "host_cancel", False): return
         tkd = self.toolkit(); py = os.path.join(tkd, ".venv", "Scripts", "python.exe")
         self.say("Starting the game server (this takes a minute)...")
         self.host_proc = p = subprocess.Popen([py, "-u", os.path.join(tkd, "companionhost.py"), jf], cwd=tkd, stdout=subprocess.PIPE,
@@ -1713,6 +1718,7 @@ class App(tk.Tk):
         p.wait()
         self.say("Hosting ended.")
         self.host_cleanup()
+        self.hosting = False
         self.after(0, lambda: (self.host_btn.configure(text="START HOSTING"), self.addr_lbl.configure(text="")))
 
     def check_game_folder(self, game):
@@ -1812,9 +1818,12 @@ class App(tk.Tk):
             self.say("Close All Windows: %s" % e)
         finally:
             self.after(0, lambda: [b.configure(state="normal", text="Close All Windows") for b in self.close_btns])
+            self.hosting = False
             self.after(0, lambda: self.host_btn.configure(text="START HOSTING"))
 
     def stop_host(self):
+        self.hosting = False; self.host_cancel = True               # (a start still checking ZeroTier stops there)
+        self.host_btn.configure(text="START HOSTING")
         try:
             if self.host_proc and self.host_proc.poll() is None:   # the whole tree: horde.py and its bots too
                 subprocess.run(["taskkill", "/PID", str(self.host_proc.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
