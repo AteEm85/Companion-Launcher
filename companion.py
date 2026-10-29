@@ -4,7 +4,7 @@ downloads and installs only those, starts your game and puts everything back as 
 HOST: sets up the bot toolkit once, then hosts a bot game with a few simple choices.
 Your own files are never overwritten: whatever is replaced is backed up first and restored afterwards (also after a crash:
 the next start puts it right). Standard library only; build with build_companion.cmd."""
-import os, sys, json, time, shutil, hashlib, threading, subprocess, urllib.request, zipfile, tempfile, webbrowser, random
+import os, re, sys, json, time, shutil, hashlib, threading, subprocess, urllib.request, zipfile, tempfile, webbrowser, random
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -350,8 +350,15 @@ class App(tk.Tk):
         except Exception:
             pass
         super().__init__()
-        self.title(APP); self.geometry("%dx%d" % (WIN_W, WIN_H)); self.configure(bg=DARK); self.resizable(False, False)
+        self.title(APP); self.configure(bg=DARK)
         self.cfg = load(); self.busy = False; self.host_proc = None; self.session = False
+        # The window can be resized and maximized: everything is drawn for WIN_W x WIN_H and zoomed to fit (rezoom).
+        self.resizable(True, True); self.minsize(WIN_W, WIN_H)
+        g = self.cfg.get("win_geom") or ""
+        self.geometry(g if re.match(r"^\d+x\d+(\+-?\d+\+-?\d+)?$", g) else "%dx%d" % (WIN_W, WIN_H))
+        if self.cfg.get("win_zoomed"):
+            try: self.state("zoomed")
+            except tk.TclError: pass
         st = ttk.Style(self)
         try: st.theme_use("clam")
         except tk.TclError: pass
@@ -373,9 +380,10 @@ class App(tk.Tk):
         self.option_add("*TCombobox*Listbox.background", "white"); self.option_add("*TCombobox*Listbox.foreground", INK)
         cv = self.cv = tk.Canvas(self, width=WIN_W, height=WIN_H, highlightthickness=0, bd=0, bg=DARK)
         cv.pack(fill="both", expand=True)
+        self._zf, self._zoom_base, self._zoom_job = (1.0, 0.0, 0.0), None, None   # (rezoom)
         try:
             import companion_bg
-            self.bg_img = tk.PhotoImage(data=companion_bg.PNG); cv.create_image(0, 0, image=self.bg_img, anchor="nw")
+            self.bg_img = tk.PhotoImage(data=companion_bg.PNG); self.bg_item = cv.create_image(0, 0, image=self.bg_img, anchor="nw")
         except Exception:
             self.bg_img = None
         try:                                     # the window's and the taskbar's icon (the exe's own icon is set at build time)
@@ -401,13 +409,106 @@ class App(tk.Tk):
         self.tab = "join"; self.have_toolkit = False
         self.build_join(); self.build_host(); self.show_tab("join")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        cv.bind("<Configure>", lambda e: self.rezoom_soon())
         self.after(200, self.startup)
+
+    # -- a window that can be resized: everything is laid out for WIN_W x WIN_H and zoomed to the window's size
+    def rezoom_soon(self):
+        if self._zoom_job: self.after_cancel(self._zoom_job)
+        self._zoom_job = self.after(120, self.rezoom)
+
+    def at(self, x, y):
+        """A point of the WIN_W x WIN_H layout, where it is on the zoomed canvas."""
+        s, ox, oy = self._zf
+        return x * s + ox, y * s + oy
+
+    def _font_spec(self, spec):
+        """A font as it was asked for (family, size, weight, slant, underline), read from its description itself, not
+        from what this PC resolved it to."""
+        from tkinter import font as tkfont
+        out = {"family": "Segoe UI", "size": 10, "weight": "normal", "slant": "roman", "underline": 0}
+        try:
+            if isinstance(spec, str) and spec in tkfont.names(self):
+                f = tkfont.nametofont(spec)
+                return {k: f.cget(k) for k in out}
+            parts = list(spec) if isinstance(spec, (tuple, list)) else list(self.tk.splitlist(spec))
+            if parts: out["family"] = parts[0]
+            if len(parts) > 1: out["size"] = int(parts[1])
+            for w in parts[2:]:
+                if w in ("bold", "normal"): out["weight"] = w
+                elif w in ("italic", "roman"): out["slant"] = w
+                elif w == "underline": out["underline"] = 1
+        except (tk.TclError, ValueError):
+            pass
+        return out
+
+    def rezoom(self):
+        """Zoom the whole layout to fit the window (aspect kept, centred): positions, text sizes, widget fonts and sizes,
+        the background picture. Everything is worked out again from the layout's own sizes, so nothing drifts."""
+        self._zoom_job = None
+        from tkinter import font as tkfont
+        cv = self.cv
+        W, H = max(1, cv.winfo_width()), max(1, cv.winfo_height())
+        s = max(1.0, min(W / WIN_W, H / WIN_H))                     # (never smaller than it was made)
+        ox, oy = (W - WIN_W * s) / 2, (H - WIN_H * s) / 2
+        s0, ox0, oy0 = self._zf
+        if abs(s - s0) < 0.01 and abs(ox - ox0) < 1 and abs(oy - oy0) < 1: return
+        parked = self.__dict__.setdefault("_parked", {})
+        for i, c in list(parked.items()): cv.coords(i, *c)          # hidden widgets back in place for the move
+        parked.clear()
+        if self._zoom_base is None:                                  # the layout's own sizes, read once at 1:1
+            base = {}
+            for i in cv.find_all():
+                t = cv.type(i)
+                if t == "text":
+                    f = self._font_spec(cv.itemcget(i, "font"))
+                    base[i] = ("text", f["family"], f["size"], f["weight"], f["slant"], f["underline"], float(cv.itemcget(i, "width") or 0))
+                elif t == "window":
+                    base[i] = ("window", float(cv.itemcget(i, "width") or 0), float(cv.itemcget(i, "height") or 0))
+                elif t == "line":
+                    base[i] = ("line", float(cv.itemcget(i, "width") or 1))
+            st = ttk.Style(self)
+            styles = {n: self._font_spec(st.lookup(n, "font") or "TkDefaultFont") for n in (".", "Big.TButton", "Close.TButton")}
+            named = {n: self._font_spec(n) for n in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkFixedFont")}
+            logf = self._font_spec(self.log_box.cget("font"))
+            self._zoom_base = (base, styles, named, logf)
+        base, styles, named, logf = self._zoom_base
+        cv.move("all", -ox0, -oy0); cv.scale("all", 0, 0, s / s0, s / s0); cv.move("all", ox, oy)
+        self._zf = (s, ox, oy)
+        size = lambda n: max(6, int(round(abs(n) * s))) * (-1 if n < 0 else 1)
+        for i, b in base.items():
+            try:
+                if b[0] == "text":
+                    font = (b[1], size(b[2]), b[3]) + (("italic",) if b[4] == "italic" else ()) + (("underline",) if b[5] else ())
+                    cv.itemconfigure(i, font=font, **({"width": b[6] * s} if b[6] else {}))
+                elif b[0] == "window":
+                    kw = {k: v * s for k, v in (("width", b[1]), ("height", b[2])) if v}
+                    if kw: cv.itemconfigure(i, **kw)
+                elif b[0] == "line":
+                    cv.itemconfigure(i, width=max(1, b[1] * s))
+            except tk.TclError:
+                pass
+        st = ttk.Style(self)
+        for n, f in styles.items():
+            st.configure(n, font=(f["family"], size(f["size"]), f["weight"]))
+        for n, f in named.items():
+            tkfont.nametofont(n).configure(size=size(f["size"]))
+        self.log_box.configure(font=(logf["family"], size(logf["size"]), logf["weight"]))
+        if getattr(self, "bg_img", None) is not None and getattr(self, "bg_item", None):
+            if abs(s - 1) < 0.02:
+                img = self.bg_img
+            else:                                                    # PhotoImage zooms by whole numbers: s ~ a / b
+                a, b = min(((-(-int(s * b * 1000) // 1000), b) for b in range(1, 5)), key=lambda ab: ab[0] / ab[1] - s)   # (covers the layout)
+                img = self.bg_img.zoom(max(1, a)).subsample(b)
+            self._bg_zoomed = img                                    # (kept, or Tk drops the picture)
+            cv.itemconfigure(self.bg_item, image=img)
+        self.visibility()
 
     def show_tab(self, key):
         self.tab = key
         for k, t in self.tabs.items(): t.configure(fill=GOLD if k == key else DIM)
         x = 28 + (0 if key == "join" else 150)
-        self.cv.coords(self.tab_line, x, 99, x + (100 if key == "join" else 104), 99)
+        self.cv.coords(self.tab_line, *self.at(x, 99), *self.at(x + (100 if key == "join" else 104), 99))
         self.visibility()
 
     def visibility(self):
@@ -528,6 +629,12 @@ class App(tk.Tk):
         if self.host_proc and self.host_proc.poll() is None:
             if not messagebox.askyesno(APP, "You are hosting a game. Stop it and quit?"): return
             self.stop_host()
+        try:                                                         # the window's size and place, for next time
+            zoomed = self.state() == "zoomed"
+            self.cfg["win_zoomed"] = zoomed
+            if not zoomed: self.cfg["win_geom"] = self.geometry()
+            save(self.cfg)
+        except Exception: pass
         self.destroy()
 
     def ensure_writable(self, folder):
