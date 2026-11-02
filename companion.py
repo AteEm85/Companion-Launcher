@@ -917,7 +917,7 @@ class App(tk.Tk):
             os.remove(new); self.say("The downloaded companion.py is broken (%s); nothing changed." % e); return
         shutil.copyfile(me, me + ".bak"); os.replace(new, me)
         try:                                                   # the background picture lives beside it
-            for extra in ("companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "spvpatch.py", "dxpatch.py", "modlab.py", "teamcolors_game.zip"):
+            for extra in ("companion_bg.py", "input_agent.js", "teamcolors.py", "darkmode.py", "flashlight.py", "spvpatch.py", "dxpatch.py", "modlab.py", "teamcolors_game.zip"):
                 with self.gh(extra, 60, root=True) as r: data = r.read()
                 with open(os.path.join(os.path.dirname(me), extra), "wb") as f: f.write(data)
         except Exception: pass
@@ -1012,6 +1012,7 @@ class App(tk.Tk):
             if not addr:
                 self.say("No hosted game found, so no mods were installed. Opening the game anyway: use LAN > Join Game.")
             game = self.game_dir(); items = []; archived = []; tmp = tempfile.mkdtemp(prefix="outlaws_comp_"); mode = ""; self.music_path = None; man = None
+            self.clear_leftovers()                       # an earlier Horde game's mods still in: out first
             try:
                 if not addr: raise OSError("no host")
                 for i in range(3):                       # the host hashes its mod files when a game starts: give it time
@@ -1490,7 +1491,7 @@ class App(tk.Tk):
         self.h_map = ttk.Combobox(self, state="readonly", width=32); self.put(self.h_map, X, 192, F)
         self.map_keys = {}
         self.h_bots = tk.IntVar(value=self.cfg.get("h_bots", 3)); self.h_users = tk.IntVar(value=self.cfg.get("h_users", 2))
-        self.h_bots_spin = ttk.Spinbox(self, from_=1, to=7, width=6, textvariable=self.h_bots)
+        self.h_bots_spin = ttk.Spinbox(self, from_=1, to=10, width=6, textvariable=self.h_bots)
         Txt(cv, 36, 228, "# of Bots (For Normal Games)", F); self.put(self.h_bots_spin, X, 228, F)
         Txt(cv, 36, 262, "Players, you included", F); self.put(ttk.Spinbox(self, from_=1, to=10, width=6, textvariable=self.h_users), X, 262, F)
         self.h_level = ttk.Combobox(self, values=LEVELS, state="readonly", width=24); self.h_level.set(self.cfg.get("h_level", "Normal"))
@@ -1517,8 +1518,8 @@ class App(tk.Tk):
         total = max(1, int(self.cfg.get("h_bots", 3) or 3))
         self.h_red = tk.StringVar(value=str(min(total, int(self.cfg.get("h_red", (total + 1) // 2)))))
         self.h_blue = tk.StringVar(value=str(total - int(self.h_red.get())))
-        self.red_spin = ttk.Spinbox(self, from_=0, to=7, width=6, textvariable=self.h_red)
-        self.blue_spin = ttk.Spinbox(self, from_=0, to=7, width=6, textvariable=self.h_blue)
+        self.red_spin = ttk.Spinbox(self, from_=0, to=10, width=6, textvariable=self.h_red)
+        self.blue_spin = ttk.Spinbox(self, from_=0, to=10, width=6, textvariable=self.h_blue)
         TS = N + ("teamsplit",)                                   # shown only for team games (visibility)
         Txt(cv, 36, 398, "Bots on Red", TS); self.put(self.red_spin, X, 398, TS)
         Txt(cv, X + 82, 398, "Bots on Blue", TS); self.put(self.blue_spin, X + 190, 398, TS)
@@ -1613,7 +1614,7 @@ class App(tk.Tk):
         def num(v, default):
             try: return int(v.get())
             except (ValueError, tk.TclError): return default
-        total = max(1, min(7, num(self.h_bots, 1)))
+        total = max(1, min(10, num(self.h_bots, 1)))
         red, blue = num(self.h_red, None), num(self.h_blue, None)
         if changed == "blue" and blue is not None: red = total - max(0, min(total, blue))
         elif red is None: return                                  # half typed: wait
@@ -1996,6 +1997,31 @@ class App(tk.Tk):
         subprocess.run(["taskkill", "/IM", "OutlawsAHOM.exe", "/F"], capture_output=True, creationflags=NO_WINDOW)
         self.say("Stopped hosting; game windows closed.")
         self.host_cleanup()
+
+    def clear_leftovers(self):
+        """Mods an earlier game left in the game folder (a Horde game whose clean-up never ran: zombie
+        skins, its map files, the Survival look in Common.kpf) are taken out before the next game
+        starts, so a normal game is never played with them. Nothing happens while a game window is open."""
+        if game_running(): return
+        found = False
+        try:
+            if journal_read():                                       # a join's mods
+                found = True; restore_files()
+            kpf = os.path.join(self.game_dir(), "Common.kpf")
+            if self.cfg.get("look_on") or (os.path.exists(kpf) and self.look_modules().dirty(kpf)):
+                found = True; self.look_off(force=True)
+            tkd = self.toolkit(); py = os.path.join(tkd, ".venv", "Scripts", "python.exe")
+            host = os.path.join(tkd, "companionhost.py")
+            st = os.path.join(tkd, "state")
+            hosted = any(os.path.exists(os.path.join(st, n)) for n in ("zombie_installed.json", "darkitems.json")) \
+                or (os.path.exists(kpf) and self.look_modules().dirty(kpf))
+            if hosted and os.path.exists(host) and os.path.exists(py):   # a hosted game's mods (this PC hosted it)
+                found = True
+                subprocess.run([py, host, "--cleanup"], cwd=tkd, capture_output=True, timeout=180, creationflags=NO_WINDOW)
+            if found:
+                self.say("Took out the mods an earlier Horde game left in the game folder.")
+        except Exception as e:
+            self.note("leftover mods: %s" % e)
 
     def host_cleanup(self):
         """Take the Horde mods out of the game folder once every game window is closed (runs on its own)."""

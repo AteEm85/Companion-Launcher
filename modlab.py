@@ -7,7 +7,10 @@ import os, struct
 
 MARK = b"OUTLAWS-COMPANION-MODS"
 OLD_MARKS = (b"OUTLAWS-COMPANION-TEST",)              # lab_test.py's test archives count as ours too
-TYPES = {".spx": b"XRPS", ".wav": b"DVAW"}           # the game's own type codes (olremaster2.lab, olsfx.lab)
+TYPES = {".spx": b"XRPS", ".wav": b"DVAW",             # the game's own type codes (olremaster2.lab, olsfx.lab,
+         ".itm": b"METI", ".nwx": b"FXAW",             # olobj.lab): items with their own sprites
+         ".hdx": b"XRPS", ".pcx": b"MTXT",             # textures: HD .hdx (SPRX like .spx), 8-bit .pcx
+         ".atx": b"FXTA"}                              # animated textures (oltex.lab's own code)
 PREFIX = "olremaster"
 
 

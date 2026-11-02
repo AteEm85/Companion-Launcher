@@ -30,7 +30,7 @@ def _targets(w,ins):
             elif _close(v,(0.0,0.0,1.0)) or _close(v,GREEN): out.append((i,'H'))
     return out,ftypes,consts,val
 
-def _recolour(b):
+def _recolour(b, s_col=PURPLE):
     """Team 1 red -> PURPLE (the Survivors), team 2 blue -> GREEN (the Horde)."""
     r=_parse(b)
     if not r: return None
@@ -39,14 +39,14 @@ def _recolour(b):
     if len(targets)!=2: return None
     ftype=next(iter(ftypes)); bound=w[3]; new={}; adds=[]
     zero=next((k for k,(t,v) in consts.items() if t==ftype and v==0.0),None)
-    for v in sorted({c for col in (PURPLE,GREEN) for c in col if c!=0.0}):
+    for v in sorted({c for col in (s_col,GREEN) for c in col if c!=0.0}):
         new[v]=bound; adds+=[(4<<16)|43,ftype,bound,F(v)]; bound+=1
     if zero is None:
         zero=bound; adds+=[(4<<16)|43,ftype,bound,0]; bound+=1
     ids={0.0:zero,**new}
     first=min(i for i,_ in targets)
     for i,team in targets:
-        col=PURPLE if team=='S' else GREEN
+        col=s_col if team=='S' else GREEN
         for k in range(3): w[i+3+k]=ids[col[k]]
     w[3]=bound
     w[first:first]=adds

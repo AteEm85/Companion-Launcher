@@ -283,6 +283,7 @@ function updateVisibility(me) {
 
 let speedMul = 1.0, boosted = 0;      // setSpeed(): walking speed multiplier for this game's own player
 const physics = exe.base.add(PLAYER_PHYSICS_RVA);
+
 // A leading JMP (0xE9) is another Frida hook on the same function, e.g. left behind by a session that
 // didn't detach cleanly. Frida chains listeners, so we can still attach; we just can't check the bytes.
 const physicsAlreadyHooked = physics.readU8() === 0xe9;
@@ -923,17 +924,38 @@ function traceFormat() {
     const want = [0x48,0x89,0x54,0x24,0x10,0x4c,0x89,0x44,0x24,0x18];
     const got = Array.from(new Uint8Array(sig));
     if (want.every((b, i) => b === got[i])) {
-      const lastSeen = new Map();
+      // The game redraws every feed line each frame while it is shown, so one event is not one call. The calls of one
+      // frame come together (a burst); the same line shown twice (the same player killing the same elf twice within a
+      // few seconds) is drawn twice in each burst. So: an event for each copy more than the last burst had, and a
+      // line gone for 0.4 s (it has scrolled away) starts again from none.
+      const lastSeen = new Map(), copies = new Map();
+      let burst = new Map(), lastCall = 0, unit = 0;   // unit: calls per line per frame (learnt: the fewest a new line had)
       const feed = /(killed|suicide|fall|died|drowned|crushed|lobby|shot to death|telefrag|blew|self-destruct|joined the game)/i;
+      const endBurst = (now) => {
+        for (const [t, n] of burst) {
+          const had = copies.get(t) || 0;
+          if (had === 0) unit = unit ? Math.min(unit, n) : n;
+          const was = had ? Math.max(1, Math.round(had / unit)) : 0, now_ = Math.max(1, Math.round(n / unit));
+          for (let k = was; k < now_; k++) if (fmtLog.length < 400) fmtLog.push('G ' + t);
+          copies.set(t, n);
+        }
+        for (const t of Array.from(copies.keys()))
+          if (!burst.has(t) && now - (lastSeen.get(t) || 0) > 400) { copies.delete(t); lastSeen.delete(t); }
+        burst = new Map();
+      };
       Interceptor.attach(a, {
         onEnter(args) {
           try {
             const t = args[1].readCString();
+            if (probeOn && t && t.length < 48 && !feed.test(t) && !probeSeen.has(t) && probeSeen.size < 400) {
+              probeSeen.add(t); fmtLog.push('P ' + Date.now() + ' ' + t);       // (looking for the scoreboard's text)
+            }
             if (t && t.length < 120 && feed.test(t)) {
-              // the game redraws a feed line every frame while it is shown: one event = one line after a quiet gap
-              const now = Date.now(), last = lastSeen.get(t) || 0;
+              const now = Date.now();
+              if (now - lastCall > 5) endBurst(now);        // a new frame (the bots run at 60 fps: 16 ms apart)
+              lastCall = now;
+              burst.set(t, (burst.get(t) || 0) + 1);
               lastSeen.set(t, now);
-              if (now - last > 2500 && fmtLog.length < 400) fmtLog.push('G ' + t);
             }
           } catch (e) {}
         },
@@ -944,7 +966,10 @@ function traceFormat() {
   return { ok: true, hooked };
 }
 
+let probeOn = false;
+const probeSeen = new Set();
 rpc.exports = {
+  probeText(on) { probeOn = !!on; return probeOn; },
   traceFormat() {
     try { return traceFormat(); } catch (e) { return { ok: false, reason: String(e) }; }
   },
@@ -956,6 +981,22 @@ rpc.exports = {
   },
   give(names) {
     try { return giveItems(names); } catch (e) { return { ok: false, reason: String(e) }; }
+  },
+  // Gun game for a human: drop every weapon but `keep` and `also` (and the fists, slot 1) from the inventory. Only while `keep` is in hand.
+  stripWeapons(keep, also) {
+    try {
+      const pd = exe.base.add(PLAYER_DATA_GLOBAL).readPointer();
+      if (pd.isNull()) return { ok: false, reason: 'no local player' };
+      const cur = pd.add(0xd8).readS32();
+      if (cur !== keep) return { ok: false, reason: 'not holding it', cur };
+      let n = 0;
+      for (let slot = 2; slot <= 10; slot++) {
+        if (slot === keep || slot === also) continue;
+        const at = pd.add(0xf0 + 8 * (slot - 1));
+        if (!at.readPointer().isNull()) { at.writePointer(NULL); n++; }
+      }
+      return { ok: true, removed: n };
+    } catch (e) { return { ok: false, reason: String(e) }; }
   },
   setCount(name, value) {
     try { return setItemCount(String(name), Number(value)); } catch (e) { return { ok: false, reason: String(e) }; }

@@ -42,6 +42,7 @@ EDITS = [
     ]),
 ]
 
+
 def state(z):
     """-> 'on', 'off', or 'mixed'"""
     on = off = 0
@@ -183,9 +184,10 @@ def _set_theme(want, kpf=KPF, quiet=False, neutral=False):
                 data = zin.read(info.filename)
                 if info.filename in edits:
                     t = data.decode("utf-8")
-                    for o, n in edits[info.filename]:
-                        src, dst = (o, n) if want == "on" else (n, o)
-                        t = t.replace(src, dst)
+                    if want == "on":
+                        for o, n in edits[info.filename]: t = t.replace(o, n)
+                    else:
+                        for o, n in edits[info.filename]: t = t.replace(n, o)
                     data = t.encode("utf-8")
                 elif "hlsl/OLHardwareSprite" in info.filename and info.filename.endswith("_ps_5_0.bin"):
                     if want == "off":              # Direct3D shaders are never patched on (the game rejects edited ones);
@@ -235,14 +237,13 @@ def dirty(kpf=KPF):
         return False
 
 def set_theme(want, kpf=KPF, quiet=False, neutral=False, dark=False):
-    """Install ('on') or remove ('off') the Survival look. dark=True ('on' only) adds the darker world and sky.
-    Returns True when the file is in the wanted state."""
+    """Install ('on') or remove ('off') the Survival look. dark=True ('on' only) adds the darker world and sky. Returns True when the file is in the wanted state."""
     if want == "off":
         gone = darkmode.off(kpf)
         return _set_theme("off", kpf, quiet, neutral) and gone
     ok = _set_theme("on", kpf, quiet, neutral)
     if ok:
-        ok = darkmode.on(kpf, flash=(dark == "flash")) if dark else darkmode.off(kpf)
+        ok = (darkmode.on(kpf, flash=(dark == "flash")) if dark else darkmode.off(kpf)) and ok
         if dark and not ok:                                  # the colours are in; the darkening isn't: carry on without it
             try:
                 with open(LOG, "a") as f: f.write(time.strftime("%H:%M:%S ") + "could not install the darker shaders\n")
@@ -262,7 +263,7 @@ def main():
     if cmd == "status":
         print("Common.kpf:", {"on": "survival theme", "off": "original red/blue"}.get(current(kpf), current(kpf)), "| dark shaders:", "ON" if darkmode.present(kpf) else "off"); return 0
     if cmd not in ("on", "off"): print("use: on | off | status"); return 2
-    dark = "flash" if "--flash" in sys.argv else ("--dark" in sys.argv)
+    dark = "flash" if "--flash" in sys.argv else  ("--dark" in sys.argv)
     while True:
         if set_theme(cmd, kpf, neutral=neutral, dark=dark): return 0
         if not wait: return 1

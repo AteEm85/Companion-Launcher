@@ -21,9 +21,9 @@ FAMILIES = {                     # shader family -> multiplier
 }
 
 
-FLASH = {                         # Dark Mode (flashlight.py): shader family -> light left outside the cone (0 = black)
-    "OLHardwareWall": 0.03, "OLHardwarePlane": 0.03, "OLHardware3DTextured": 0.04,
-    "OLHardwareSky": 0.02, "OLHardwareHorizon": 0.02, "OLHardwareSprite": 0.20,
+FLASH = {                         # Dark Mode (flashlight.py): shader family -> colour multiplier outside the cone (cold, very dim)
+    "OLHardwareWall": (0.15, 0.16, 0.21), "OLHardwarePlane": (0.15, 0.16, 0.21), "OLHardware3DTextured": (0.17, 0.18, 0.23),
+    "OLHardwareSky": (0.06, 0.07, 0.11), "OLHardwareHorizon": (0.06, 0.07, 0.11), "OLHardwareSprite": (0.30, 0.30, 0.36),
 }
 
 
