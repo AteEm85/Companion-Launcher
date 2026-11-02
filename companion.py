@@ -1537,6 +1537,9 @@ class App(tk.Tk):
         self.h_trim = tk.BooleanVar(value=self.cfg.get("h_trim", True))
         self.trim_tick = Txt(cv, 36, 466, "", F, font=("Segoe UI Symbol", 10))
         self.trim_tick.bind(lambda: (self.h_trim.set(not self.h_trim.get()), self.draw_ticks()))
+        self.h_bench = tk.BooleanVar(value=self.cfg.get("h_bench", True))           # team games only: bots sit out in turns when the teams are uneven
+        self.bench_tick = Txt(cv, X + 190, 466, "", N, font=("Segoe UI Symbol", 10))
+        self.bench_tick.bind(lambda: (self.h_bench.set(not self.h_bench.get()), self.draw_ticks()) if self.team_game() else None)
         ram, cpu = hardware(); low = (ram and ram < 16) or cpu < 8
         self.low_pc = bool(low)
         Txt(cv, 36, 486, (
@@ -1560,6 +1563,8 @@ class App(tk.Tk):
         for t, tick in self.kind_ticks.items():
             tick.configure(text=("◉ " if self.h_mapkind.get() == t else "○ ") + t)
         self.trim_tick.configure(text=("☑ " if self.h_trim.get() else "☐ ") + "Trim Idle Bot Memory (Lowers RAM Usage)")
+        if hasattr(self, "bench_tick"):                         # only shown for the team games (Team deathmatch, Capture the flag)
+            self.bench_tick.configure(text=(("☑ " if self.h_bench.get() else "☐ ") + "Bench if uneven") if self.team_game() else "")
         if hasattr(self, "private_tick"):
             self.private_tick.configure(text=("☑ " if self.h_private.get() else "☐ ") + "Private game")
 
@@ -1606,6 +1611,7 @@ class App(tk.Tk):
     def botteam_state(self):
         for w in (getattr(self, "red_spin", None), getattr(self, "blue_spin", None)):
             if w is not None: w.state(["!disabled"] if self.team_game() else ["disabled"])
+        self.draw_ticks()
         if hasattr(self, "tab"): self.visibility()           # the Bots on Red / Blue row: team games only
 
     def split_bots(self, changed):
@@ -1841,9 +1847,10 @@ class App(tk.Tk):
                **lim}
         if kind != "horde" and self.team_game():
             red, blue = self.bot_split()
+            cfg["bench"] = bool(self.h_bench.get())
             cfg["red_bots"] = red                                       # the rest are blue; everyone picks their own team in the lobby
         self.cfg.update(h_game=self.h_game.get(), h_map=self.h_map.get(), h_mapkind=self.h_mapkind.get(), h_bots=self.h_bots.get(), h_users=self.h_users.get(),
-                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), screen_v2=True, h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_private=bool(self.h_private.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
+                        h_level=self.h_level.get(), h_hmode=self.h_hmode.get(), h_char=self.h_char.get(), h_screen=self.h_screen.get(), screen_v2=True, h_kills=self.h_kills.get().strip(), h_time=self.h_time.get().strip(), h_trim=bool(self.h_trim.get()), h_bench=bool(self.h_bench.get()), h_private=bool(self.h_private.get()), h_mode=self.h_mode.get(), h_red=self.bot_split()[0]); save(self.cfg)
         tkd = self.toolkit(); jf = os.path.join(tkd, "companion_host.json")
         with open(jf, "w") as f: json.dump(cfg, f)
         self.host_btn.configure(text="STOP"); self.hosting = True
