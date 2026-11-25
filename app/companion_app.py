@@ -22,7 +22,7 @@ import urllib.request
 import zipfile
 
 APP = "Outlaws Companion"
-VERSION = 40                              # (the old Companion was 30; the launcher-faced one starts at 40)
+VERSION = 41                              # (the old Companion was 30; the launcher-faced one started at 40)
 DATA = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "OutlawsCompanion")
 CONFIG = os.path.join(DATA, "config.json")
 REPO, BRANCH = "AteEm85/Companion-Launcher", "main"

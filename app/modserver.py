@@ -8,7 +8,11 @@ Usage: python modserver.py [mode] [map]   (runs until closed; for testing)"""
 import os, sys, json, hashlib, threading, zipfile, io, socket, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+# (25 Nov: the Companion has this built in, and its .exe can be anywhere - the Desktop, Downloads: the files a joiner needs
+#  (the map files, the Christmas art, the mission's state) are in its BOT_HOME, <game>\botctl. Joiners got an almost empty list
+#  and "incompatible level data".)
+HERE = os.path.abspath(os.environ["BOT_HOME"]) if os.environ.get("BOT_HOME") else \
+    os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 GAME = os.path.dirname(HERE)
 PORT = 8765
 DISCOVER_PORT = 8766
@@ -16,7 +20,10 @@ BUILTIN_MAPS = {"civpow2", "drygulch", "fort", "granary", "hargrove", "lilbatl",
                 "thudtowr", "town_2p", "wilderns"}
 MAP_EXT = (".lab", ".rcm")      # (Dark Mode adds .obt / .obb above)
 TOOLKIT_EXT = (".py", ".js", ".cmd", ".txt")
-TOOLKIT_JSON = ("maps_data.json", "maps_extra.json", "mapbatch_assets.json", "teamcolors_game.zip")   # + the game's own sprite shaders (teamcolors.py)
+TOOLKIT_JSON = ("maps_data.json", "maps_extra.json", "mapbatch_assets.json", "teamcolors_game.zip",
+                # (25 Nov: a friend's every ghost quit at once - "No such file: ghostscript2.json". The ghost player's own data:)
+                "ghostscript.json", "ghostscript2.json", "respawn_templates.json", "throw_templates.json",
+                "jump_macros_hargrove.json", "jump_macros_town_2p.json")   # + the game's own sprite shaders (teamcolors.py)
 TOOLKIT_SKIP = ("online_settings", "launcher_settings", "bot_presets")
 TOOLKIT_DIRS = {"zombie": (".spx", ".wav", ".nwx", ".itm", ".json"), "sounds": (".wav",),     # the Horde's zombie skins and its music / sound effects,
                 "christmas": (".spx", ".wav", ".itm", ".nwx", ".pcx", ".hdx", ".atx", ".json"), "christmas/music": (".wav",)}   # the Christmas Horde's
@@ -101,7 +108,7 @@ def mods():
             pass
     if (mode == "dark" or INFO.get("melee") or xmas or hallow) and mp:   # Dark Mode / Melee Zombies: the map's swapped item lists (darkitems.py wrote them)
         items = [(os.path.join(GAME, n), n, "/f/map/" + n) for n in sorted(os.listdir(GAME))
-                 if os.path.splitext(n)[0].lower() in maps_ and os.path.splitext(n)[1].lower() in ((".obt", ".obb", ".lvt", ".lvb") if xmas else (".obt", ".obb"))]
+                 if os.path.splitext(n)[0].lower() in maps_ and os.path.splitext(n)[1].lower() in ((".obt", ".obb", ".lvt", ".lvb", ".inf") if xmas else (".obt", ".obb"))]   # (.inf: a mission's locked / opened doors)
         if items:
             out.append({"id": "items_" + mp, "title": ("Christmas trees and lights (%s)" if xmas else "Halloween props (%s)" if hallow else "Melee Zombies map items (%s)" if INFO.get("melee") else "Dark Mode map items (%s)") % INFO["map"], "items": items})
     if mp and mp not in BUILTIN_MAPS or (mode in ("horde", "dark", "team") and mp == "town_2p"):   # Sanctuary: its Team Play .rcm
