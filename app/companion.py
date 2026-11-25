@@ -24,7 +24,9 @@ ZT_SERVICE = "ZeroTierOneService"
 ZT_MSI = "https://download.zerotier.com/dist/ZeroTier%20One.msi"
 ZT_CLI = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "ZeroTier", "One", "zerotier-cli.bat")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-ALLOWED_EXT = (".spx", ".wav", ".lab", ".rcm", ".obt", ".obb")      # .wav: the zombie death sounds
+ALLOWED_EXT = (".spx", ".wav", ".lab", ".rcm", ".obt", ".obb",     # .wav: the zombie death sounds
+               ".lvt", ".lvb", ".inf",                               # (25 Nov: a Christmas map's walls, lights and doors - left out,
+               ".itm", ".nwx", ".pcx", ".hdx", ".atx", ".3do")      #  the joiner's map didn't match: "incompatible level data")
 CHARS = ["Sanchez", "James Anderson", "Two Feathers", "Dr Death", "Bob", "Mary"]
 # (flags, v_windowmode). Exclusive full screen gives no size, so the game keeps its own resolution (yours, if you
 # changed it in the game's settings); Full screen and Borderless window run at the desktop's resolution.
